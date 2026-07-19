@@ -163,4 +163,6 @@ enum ClaudeCredentialScope: Hashable, Sendable {
     /// One extra `CLAUDE_CONFIG_DIR` home. `keychainLiteral` is the literal string whose hash names
     /// the keychain item (Claude Code hashes the env value as typed — `~/…` vs absolute differ).
     case configDir(path: String, keychainLiteral: String)
+    /// Claude Desktop's cached credential for one verified organization.
+    case desktopOnly(organization: String)
 }

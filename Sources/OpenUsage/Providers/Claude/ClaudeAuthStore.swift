@@ -20,11 +20,15 @@ struct ClaudeAuthStore: Sendable {
     let expectedIdentityKey: String?
     /// Aliases explicitly verified against this card's selected credential source at launch.
     let verifiedIdentityAliases: Set<String>
-    /// Whether the `.standard` store may fall back to Claude Desktop's credentials. On by default
-    /// (the historical behavior); the catalog turns it OFF once extra Claude account cards exist,
-    /// because the Desktop login could belong to any of them — borrowing it unpinned could fetch one
-    /// account's usage onto another account's card. Desktop-backed cards return properly in Phase 3.
-    let allowsDesktopFallback: Bool
+    /// The `.standard` card's Desktop fallback pins to this org once extra Claude cards exist (the
+    /// default account's own org, parsed from its identity key) — an unpinned fallback could borrow
+    /// a Desktop login that belongs to one of the other cards, fetching that account's usage onto
+    /// the default card.
+    let standardDesktopOrganization: String?
+    /// Whether the `.standard` store may fall back to Desktop's *active* org when no org pin is
+    /// known. On by default (the historical single-account behavior); the catalog turns it OFF once
+    /// extra Claude account cards exist, so without a pin the fallback is disabled rather than blind.
+    let allowsUnpinnedStandardDesktopFallback: Bool
 
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
@@ -32,10 +36,11 @@ struct ClaudeAuthStore: Sendable {
         keychain: KeychainAccessing = SecurityKeychainAccessor(),
         desktop: ClaudeDesktopAuthStore? = nil,
         scope: ClaudeCredentialScope = .standard,
-        allowsDesktopFallback: Bool = true,
         expectedIdentityKey: String? = nil,
         verifiedIdentityAliases: Set<String> = [],
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
+        standardDesktopOrganization: String? = nil,
+        allowsUnpinnedStandardDesktopFallback: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.environment = environment
@@ -44,9 +49,10 @@ struct ClaudeAuthStore: Sendable {
         self.desktop = desktop ?? ClaudeDesktopAuthStore(files: files, now: now)
         self.homeDirectory = homeDirectory
         self.scope = scope
-        self.allowsDesktopFallback = allowsDesktopFallback
         self.expectedIdentityKey = expectedIdentityKey
         self.verifiedIdentityAliases = verifiedIdentityAliases
+        self.standardDesktopOrganization = standardDesktopOrganization?.nilIfEmpty?.lowercased()
+        self.allowsUnpinnedStandardDesktopFallback = allowsUnpinnedStandardDesktopFallback
         self.now = now
     }
 
@@ -63,9 +69,21 @@ struct ClaudeAuthStore: Sendable {
         var desktopStatus: ClaudeDesktopCredentialStatus = .notChecked
         // A working CLI login remains the source of truth and avoids a second Keychain prompt. Desktop
         // is a fallback for people who only use the native app (or whose stored CLI login lacks profile
-        // scope), never a competing account source. A `.configDir` card never consults Desktop at all —
-        // that login belongs to another card.
-        let desktopAllowed = scope == .standard && allowsDesktopFallback
+        // scope), never a competing account source. Scoped cards are stricter: a `.configDir` card
+        // never consults Desktop at all (that login belongs to another card), and a `.desktopOnly`
+        // card consults nothing else — always pinned to its own org.
+        let desktopAllowed: Bool
+        var desktopOrganization: String?
+        switch scope {
+        case .standard:
+            desktopAllowed = standardDesktopOrganization != nil || allowsUnpinnedStandardDesktopFallback
+            desktopOrganization = standardDesktopOrganization
+        case .desktopOnly(let organization):
+            desktopAllowed = true
+            desktopOrganization = organization
+        case .configDir:
+            desktopAllowed = false
+        }
         if forceDesktopFallback, !desktopAllowed {
             // Tell the provider there is no safe Desktop candidate so it preserves the original CLI
             // auth error instead of converting it to a generic "not logged in" result.
@@ -75,7 +93,7 @@ struct ClaudeAuthStore: Sendable {
             $0.hasUsableAccessToken && liveUsageAvailability($0) == .available
         }
         if desktopAllowed, forceDesktopFallback || !hasUsableCLILogin {
-            let result = desktop.load(allowInteraction: allowDesktopInteraction)
+            let result = desktop.load(allowInteraction: allowDesktopInteraction, organization: desktopOrganization)
             desktopStatus = result.status
             if let oauth = result.oauth {
                 stored.insert(ClaudeCredentialState(
@@ -108,6 +126,11 @@ struct ClaudeAuthStore: Sendable {
             return keychainServiceCandidates().contains {
                 keychain.genericPasswordExists(service: $0) == true
             }
+        case .desktopOnly(let organization):
+            // `allowInteraction: false` can never raise a dialog: a not-yet-granted Safe Storage key
+            // read comes back as `.permissionRequired`, which still proves a Desktop login exists.
+            let status = desktop.load(allowInteraction: false, organization: organization).status
+            return status == .available || status == .permissionRequired || status == .stale
         }
     }
 
@@ -117,6 +140,10 @@ struct ClaudeAuthStore: Sendable {
         switch scope {
         case .configDir(let path, _):
             identityPath = "\(path)/.claude.json"
+        case .desktopOnly(let organization):
+            guard let separator = expectedIdentityKey.firstIndex(of: "|") else { return false }
+            return expectedIdentityKey[expectedIdentityKey.index(after: separator)...]
+                .caseInsensitiveCompare(organization) == .orderedSame
         case .standard:
             let home = claudeHomeOverride() ?? Self.defaultClaudeHome
             guard !home.contains(",") else { return false }
@@ -325,6 +352,8 @@ struct ClaudeAuthStore: Sendable {
             // Exactly this card's item — never the bare default service, which is another account's
             // login.
             return ["\(base)-\(hashSuffix(keychainLiteral))"]
+        case .desktopOnly:
+            return []
         case .standard:
             if let configDir = claudeHomeOverride() {
                 return ["\(base)-\(hashSuffix(configDir))"]
@@ -346,6 +375,8 @@ struct ClaudeAuthStore: Sendable {
     /// later expiry (the #738 regression from ranking purely by expiry). The source kind (never the
     /// token) is logged so a "locked out" report can be diagnosed from which source was chosen.
     private func orderedStoredCandidates() -> [ClaudeCredentialState] {
+        // A desktop-only card has no CLI sources at all.
+        if case .desktopOnly = scope { return [] }
         var candidates: [ClaudeCredentialState] = []
         if let keychain = loadKeychainCredentials() { candidates.append(keychain) }
         if let file = loadFileCredentials() { candidates.append(file) }

@@ -42,6 +42,7 @@ struct ProviderAccountSource: Codable, Equatable, Sendable {
     struct Kind: RawRepresentable, Codable, Equatable, Hashable, Sendable {
         static let defaultHome = Self(rawValue: "defaultHome")
         static let configDir = Self(rawValue: "configDir")
+        static let desktop = Self(rawValue: "desktop")
 
         let rawValue: String
 
@@ -58,7 +59,7 @@ struct ProviderAccountSource: Codable, Equatable, Sendable {
             try container.encode(rawValue)
         }
 
-        var isKnown: Bool { self == .defaultHome || self == .configDir }
+        var isKnown: Bool { self == .defaultHome || self == .configDir || self == .desktop }
     }
 
     var kind: Kind

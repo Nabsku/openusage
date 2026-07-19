@@ -1,9 +1,21 @@
 import Foundation
 
-/// One extra Claude account card to build this launch: a custom-config-dir login found on this
-/// computer whose account is distinct from the default card's. Cards render only while their source
-/// is found (owner decision 4) — a record with no finding this launch simply builds no card.
+/// One extra Claude account card to build this launch: a login found on this computer whose account
+/// is distinct from the default card's — a custom-config-dir login, or a Claude Desktop (Cowork)
+/// login. Cards render only while their source is found (owner decision 4) — a record with no
+/// finding this launch simply builds no card.
 struct ClaudeAccountCard: Equatable, Sendable {
+    /// Where the card's credentials come from (its spend logs are `logRoots`, kept separate —
+    /// a Desktop-backed card's logs are Cowork sandboxes, not a credential home).
+    enum Credential: Equatable, Sendable {
+        /// One custom `CLAUDE_CONFIG_DIR` home; `keychainLiteral` names the dir's keychain item
+        /// (see `ClaudeCredentialScope.configDir`).
+        case configDir(path: String, keychainLiteral: String)
+        /// Claude Desktop's Safe Storage cache, pinned to this org's token
+        /// (see `ClaudeCredentialScope.desktopOnly`).
+        case desktop(organization: String)
+    }
+
     /// The account's stable record id (`claude@ab12cd34`) — the card id everywhere: layout, cache,
     /// CLI/API matching.
     var id: String
@@ -12,12 +24,10 @@ struct ClaudeAccountCard: Equatable, Sendable {
     /// render time, so a baked name can never be a stale copy of one.
     var displayName: String
     var identityKey: String
-    /// The config dir the card's credentials and spend logs are pinned to.
-    var configDirPath: String
-    /// The literal string whose hash names the dir's keychain item (see `ClaudeCredentialScope`).
-    var keychainLiteral: String
-    /// Same-account additional config dirs (rare): extra spend-log roots, never extra credentials.
-    var extraLogRoots: [URL] = []
+    var credential: Credential
+    /// Every spend-log root the card scans: its config dir(s), plus any Cowork sandboxes this
+    /// account produced.
+    var logRoots: [URL]
     /// Only identities observed at this card's verified credential source may authorize aliases.
     var verifiedIdentityAliases: Set<String> = []
 }
@@ -47,6 +57,20 @@ struct ProviderAccountAssembly {
     var isClaudeDiscoveryComplete = true
     /// A first-launch shell delay cannot hide another account when no Claude record exists yet.
     var allowsUnownedClaudeDesktopFallback = false
+    /// Set only when another account's Cowork sandboxes exist: the default card's partition of the
+    /// Cowork walk (that account's sessions must not bleed into the default card's spend). `nil`
+    /// keeps the scanner's built-in walk byte-identical.
+    var defaultClaudeCoworkRoots: [URL]?
+
+    /// The default Claude account's org UUID, parsed from its identity key (`uuid|org`) — the pin
+    /// the default card's Desktop fallback reads under once other Claude cards exist. `nil` when
+    /// the default identity is unresolved or the account has no org.
+    var defaultClaudeOrganization: String? {
+        guard let key = identityKeysByCard[defaultClaudeCardID],
+              let separator = key.firstIndex(of: "|")
+        else { return nil }
+        return String(key[key.index(after: separator)...]).nilIfEmpty
+    }
 
     /// `waitsForLoginShell`: true for the menu-bar app (a Finder/Dock launch inherits no shell
     /// exports, so the pass leans on the login-shell layers), false for the one-shot CLI (a terminal
@@ -90,7 +114,8 @@ struct ProviderAccountAssembly {
             observer: DefaultAccountObserver(),
             accountsStore: resolvedAccountsStore,
             families: families,
-            claudeDiscovery: ClaudeConfigDirDiscovery()
+            claudeDiscovery: ClaudeConfigDirDiscovery(),
+            coworkDiscovery: ClaudeCoworkDiscovery()
         )
     }
 
@@ -111,7 +136,8 @@ struct ProviderAccountAssembly {
         observer: DefaultAccountObserver,
         accountsStore: ProviderAccountsStore,
         families: Set<String> = ProviderAccountID.families,
-        claudeDiscovery: ClaudeConfigDirDiscovery? = nil
+        claudeDiscovery: ClaudeConfigDirDiscovery? = nil,
+        coworkDiscovery: ClaudeCoworkDiscovery? = nil
     ) -> ProviderAccountAssembly {
         var identityKeys: [String: String] = [:]
         var observations: [ProviderAccountsStore.AccountObservation] = []
@@ -141,92 +167,164 @@ struct ProviderAccountAssembly {
             }
         }
 
-        // Extra Claude logins in custom config dirs. Guarded on the default read: when a default
-        // login clearly EXISTS but can't be named (`unresolved`), accepting candidates could render
-        // the very account the default card shows as a second card — skip them this launch instead.
-        // A machine with no default login at all keeps accepting: there is nothing to duplicate,
-        // and a custom-dir-only login should still get its card.
-        var foundClaudeAccounts: [(identityKey: String, label: String?, dirs: [ClaudeConfigDirDiscovery.Finding])] = []
+        // Extra Claude logins in custom config dirs and Cowork sandboxes. Guarded on the default
+        // read: when a default login clearly EXISTS but can't be named (`unresolved`), accepting
+        // candidates could render the very account the default card shows as a second card — skip
+        // them this launch instead. A machine with no default login at all keeps accepting: there
+        // is nothing to duplicate, and a custom-dir-only login should still get its card.
+        var plannedCards: [PlannedClaudeCard] = []
         var defaultClaudeExtraLogRoots: [URL] = []
         var isClaudeDiscoveryComplete = families.contains("claude")
         let preferredConfigAnchors = Dictionary(uniqueKeysWithValues: accountsStore.records.compactMap { record in
             record.sources.first { $0.kind == .configDir }?.anchor.map { (record.identityKey, $0) }
         })
+        var defaultClaudeCoworkRoots: [URL]?
         let claudeOutcome = outcomes.first { $0.family == "claude" }?.outcome
         if case .unresolved = claudeOutcome {
             isClaudeDiscoveryComplete = false
         }
-        if let claudeDiscovery, let claudeOutcome {
+        var claudeCandidatesAllowed = false
+        if let claudeOutcome {
             if case .unresolved = claudeOutcome {
                 AppLog.info(.config, "discovery: claude default login present but its identity is unreadable → skipping extra-account candidates this launch")
             } else {
-                let defaultKey = identityKeys["claude"]
-                let scan = claudeDiscovery.run(prioritizing: Set(preferredConfigAnchors.values))
-                isClaudeDiscoveryComplete = !scan.truncated
-                for note in scan.notes {
-                    AppLog.info(.config, "discovery: \(note)")
+                claudeCandidatesAllowed = true
+            }
+        }
+        if let claudeDiscovery, claudeCandidatesAllowed {
+            let defaultKey = identityKeys["claude"]
+            let scan = claudeDiscovery.run(prioritizing: Set(preferredConfigAnchors.values))
+            isClaudeDiscoveryComplete = !scan.truncated
+            for note in scan.notes {
+                AppLog.info(.config, "discovery: \(note)")
+            }
+            var order: [String] = []
+            var grouped: [String: [ClaudeConfigDirDiscovery.Finding]] = [:]
+            for finding in scan.findings where isClaudeDiscoveryComplete {
+                let records = accountsStore.records.filter {
+                    $0.family == "claude" && $0.matches(identityKey: finding.identityKey)
                 }
-                var order: [String] = []
-                var grouped: [String: [ClaudeConfigDirDiscovery.Finding]] = [:]
-                for finding in scan.findings where isClaudeDiscoveryComplete {
-                    let records = accountsStore.records.filter {
-                        $0.family == "claude" && $0.matches(identityKey: finding.identityKey)
-                    }
-                    guard records.count <= 1 else {
-                        isClaudeDiscoveryComplete = false
-                        order.removeAll()
-                        grouped.removeAll()
-                        break
-                    }
-                    let identityKey = records.first?.identityKey ?? finding.identityKey
-                    if grouped[identityKey] == nil { order.append(identityKey) }
-                    grouped[identityKey, default: []].append(finding)
+                guard records.count <= 1 else {
+                    isClaudeDiscoveryComplete = false
+                    order.removeAll()
+                    grouped.removeAll()
+                    break
                 }
-                for identityKey in order {
-                    var findings = grouped[identityKey] ?? []
-                    if let preferred = preferredConfigAnchors[identityKey],
-                       let index = findings.firstIndex(where: { $0.anchorPath == preferred }),
-                       index != 0
-                    {
-                        findings.insert(findings.remove(at: index), at: 0)
-                    }
-                    let sources = findings.map {
-                        ProviderAccountSource(
-                            kind: .configDir,
-                            anchor: $0.anchorPath,
-                            holdsDefaultSource: false,
-                            keychainLiteral: $0.keychainLiteral
-                        )
-                    }
-                    let matchesDefault = defaultKey.map { observedDefault in
-                        identityKey.caseInsensitiveCompare(observedDefault) == .orderedSame
-                            || accountsStore.records.contains {
-                                $0.family == "claude"
-                                    && $0.matches(identityKey: observedDefault)
-                                    && $0.matches(identityKey: identityKey)
-                            }
-                    } ?? false
-                    if matchesDefault {
-                        // Same account as the default card: its dirs are extra spend-log roots on
-                        // that card, never a second card — duplicate cards are structurally
-                        // impossible because identity routes the source to the existing record.
-                        defaultClaudeExtraLogRoots += findings.map { URL(fileURLWithPath: $0.anchorPath) }
-                        if let index = observations.firstIndex(where: {
-                            $0.family == "claude" && $0.identityKey == defaultKey
-                        }) {
-                            observations[index].sources += sources
+                let identityKey = records.first?.identityKey ?? finding.identityKey
+                if grouped[identityKey] == nil { order.append(identityKey) }
+                grouped[identityKey, default: []].append(finding)
+            }
+            for identityKey in order {
+                var findings = grouped[identityKey] ?? []
+                if let preferred = preferredConfigAnchors[identityKey],
+                   let index = findings.firstIndex(where: { $0.anchorPath == preferred }), index != 0
+                {
+                    findings.insert(findings.remove(at: index), at: 0)
+                }
+                let sources = findings.map {
+                    ProviderAccountSource(
+                        kind: .configDir,
+                        anchor: $0.anchorPath,
+                        holdsDefaultSource: false,
+                        keychainLiteral: $0.keychainLiteral
+                    )
+                }
+                let matchesDefault = defaultKey.map { observedDefault in
+                    identityKey.caseInsensitiveCompare(observedDefault) == .orderedSame
+                        || accountsStore.records.contains {
+                            $0.family == "claude"
+                                && $0.matches(identityKey: observedDefault)
+                                && $0.matches(identityKey: identityKey)
                         }
-                        AppLog.info(.config, "discovery: \(findings.count) config dir(s) fold onto the default claude card (same account)")
-                    } else {
-                        observations.append(ProviderAccountsStore.AccountObservation(
-                            family: "claude",
-                            identityKey: identityKey,
-                            label: findings.first?.label,
-                            sources: sources
-                        ))
-                        foundClaudeAccounts.append((findings[0].identityKey, findings[0].label, findings))
+                } ?? false
+                if matchesDefault {
+                    // Same account as the default card: its dirs are extra spend-log roots on
+                    // that card, never a second card — duplicate cards are structurally
+                    // impossible because identity routes the source to the existing record.
+                    defaultClaudeExtraLogRoots += findings.map { URL(fileURLWithPath: $0.anchorPath) }
+                    if let index = observations.firstIndex(where: {
+                        $0.family == "claude" && $0.identityKey == defaultKey
+                    }) {
+                        observations[index].sources += sources
                     }
+                    AppLog.info(.config, "discovery: \(findings.count) config dir(s) fold onto the default claude card (same account)")
+                } else {
+                    guard let primary = findings.first else { continue }
+                    observations.append(ProviderAccountsStore.AccountObservation(
+                        family: "claude",
+                        identityKey: identityKey,
+                        label: primary.label,
+                        sources: sources
+                    ))
+                    plannedCards.append(PlannedClaudeCard(
+                        identityKey: identityKey,
+                        credential: .configDir(path: primary.anchorPath, keychainLiteral: primary.keychainLiteral),
+                        logRoots: findings.map { URL(fileURLWithPath: $0.anchorPath) },
+                        verifiedIdentityAliases: [primary.identityKey]
+                    ))
                 }
+            }
+        }
+
+        // Cowork sandboxes: identity comes from each session sandbox's own `.claude.json`.
+        // Sandboxes naming the default login (the overwhelmingly common case) stay exactly where
+        // they are today — on the default card. Sandboxes naming an account already found in a
+        // config dir become that card's extra log roots. A distinct account becomes ONE
+        // Desktop-backed card (org-pinned Safe Storage credentials) with its sandboxes as the
+        // card's spend logs. The moment any non-default sandbox exists, the default card's walk is
+        // partitioned so another account's sessions can't bleed into its spend.
+        if let coworkDiscovery, claudeCandidatesAllowed {
+            let defaultKey = identityKeys["claude"]
+            let scan = coworkDiscovery.run()
+            for note in scan.notes {
+                AppLog.info(.config, "discovery: \(note)")
+            }
+            var defaultBucket: [URL] = []
+            var order: [String] = []
+            var grouped: [String: [ClaudeCoworkDiscovery.Sandbox]] = [:]
+            for sandbox in scan.sandboxes {
+                guard let key = sandbox.identityKey, key != defaultKey else {
+                    // An unidentified sandbox counts on the default card, exactly where the
+                    // built-in walk has always put it.
+                    defaultBucket.append(sandbox.root)
+                    continue
+                }
+                if grouped[key] == nil { order.append(key) }
+                grouped[key, default: []].append(sandbox)
+            }
+            for identityKey in order {
+                let sandboxes = grouped[identityKey] ?? []
+                let roots = sandboxes.map(\.root)
+                if let index = plannedCards.firstIndex(where: { $0.identityKey == identityKey }) {
+                    // The account already has a card from its config dir; its sandboxes are just
+                    // more of its spend logs.
+                    plannedCards[index].logRoots += roots
+                    AppLog.info(.config, "discovery: \(roots.count) cowork sandbox(es) attach to an existing claude account card as log roots")
+                    continue
+                }
+                guard let organization = sandboxes.compactMap(\.organization).first else {
+                    // Desktop caches tokens per org; without the pin the card could only read
+                    // Desktop's ACTIVE org, which may be a different account's usage pool.
+                    AppLog.info(.config, "discovery: cowork account \(ProviderAccountID.make(family: "claude", identityKey: identityKey)) has no organization pin → skipped Desktop-backed card")
+                    continue
+                }
+                let label = sandboxes.compactMap(\.label).first
+                observations.append(ProviderAccountsStore.AccountObservation(
+                    family: "claude",
+                    identityKey: identityKey,
+                    label: label,
+                    sources: [ProviderAccountSource(kind: .desktop, anchor: nil, holdsDefaultSource: false)]
+                ))
+                plannedCards.append(PlannedClaudeCard(
+                    identityKey: identityKey,
+                    credential: .desktop(organization: organization),
+                    logRoots: roots,
+                    verifiedIdentityAliases: [identityKey]
+                ))
+            }
+            if !order.isEmpty {
+                defaultClaudeCoworkRoots = defaultBucket
+                AppLog.info(.config, "discovery: cowork partition — default keeps \(defaultBucket.count) sandbox dir(s), \(order.count) other account(s) found")
             }
         }
 
@@ -261,24 +359,23 @@ struct ProviderAccountAssembly {
         // The extra-card build plan: one card per distinct account found this launch, under its
         // reconciled record id.
         var claudeCards: [ClaudeAccountCard] = []
-        for account in foundClaudeAccounts {
+        for planned in plannedCards {
             guard let record = records.first(where: {
-                $0.family == "claude" && $0.matches(identityKey: account.identityKey)
+                $0.family == "claude" && $0.matches(identityKey: planned.identityKey)
             }) else {
                 continue
             }
-            guard let primary = account.dirs.first else { continue }
             claudeCards.append(ClaudeAccountCard(
                 id: record.id,
                 displayName: record.derivedDisplayName,
                 identityKey: record.identityKey,
-                configDirPath: primary.anchorPath,
-                keychainLiteral: primary.keychainLiteral,
-                extraLogRoots: account.dirs.dropFirst().map { URL(fileURLWithPath: $0.anchorPath) },
-                verifiedIdentityAliases: [primary.identityKey]
+                credential: planned.credential,
+                logRoots: planned.logRoots,
+                verifiedIdentityAliases: planned.verifiedIdentityAliases
             ))
             identityKeys[record.id] = record.identityKey
-            AppLog.info(.config, "accounts: extra claude card \(record.id) from \(account.dirs.count) config dir(s)")
+            let kind = if case .desktop = planned.credential { "desktop (cowork)" } else { "config dir" }
+            AppLog.info(.config, "accounts: extra claude card \(record.id) — \(kind), \(planned.logRoots.count) log root(s)")
         }
         claudeCards.sort { $0.id < $1.id }
 
@@ -295,7 +392,16 @@ struct ProviderAccountAssembly {
             defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude",
             isClaudeDiscoveryComplete: isClaudeDiscoveryComplete,
             allowsUnownedClaudeDesktopFallback:
-                !families.contains("claude") && !records.contains { $0.family == "claude" }
+                !families.contains("claude") && !records.contains { $0.family == "claude" },
+            defaultClaudeCoworkRoots: defaultClaudeCoworkRoots
         )
+    }
+
+    /// One distinct account's card plan before reconciliation assigns its record id.
+    private struct PlannedClaudeCard {
+        var identityKey: String
+        var credential: ClaudeAccountCard.Credential
+        var logRoots: [URL]
+        var verifiedIdentityAliases: Set<String>
     }
 }

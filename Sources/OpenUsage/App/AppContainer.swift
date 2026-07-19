@@ -85,7 +85,9 @@ final class AppContainer {
             defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
             claudeIdentityKeys: accountAssembly.identityKeysByCard,
             isClaudeDiscoveryComplete: accountAssembly.isClaudeDiscoveryComplete,
-            allowsUnownedClaudeDesktopFallback: accountAssembly.allowsUnownedClaudeDesktopFallback
+            allowsUnownedClaudeDesktopFallback: accountAssembly.allowsUnownedClaudeDesktopFallback,
+            defaultClaudeCoworkRoots: accountAssembly.defaultClaudeCoworkRoots,
+            defaultClaudeOrganization: accountAssembly.defaultClaudeOrganization
         )
         let registry = WidgetRegistry.from(providers)
         let apiKeyProviders = providers.compactMap { $0 as? any APIKeyManaging }
