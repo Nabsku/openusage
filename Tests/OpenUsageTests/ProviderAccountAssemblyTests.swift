@@ -205,7 +205,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
     }
 
-    func testARenamedRecordDrivesTheCardDisplayName() throws {
+    func testARenameNeverBakesIntoTheCardOnlyTheResolverCarriesIt() throws {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)
         let observer = DefaultAccountObserver(
@@ -230,12 +230,16 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(first.claudeCards.first?.displayName, cardID, "no label → the short-hash id fallback")
         store.rename(cardID: cardID, to: "Work Max")
 
+        let reloadedStore = ProviderAccountsStore(defaults: defaults)
         let second = ProviderAccountAssembly.make(
             observer: observer,
-            accountsStore: ProviderAccountsStore(defaults: defaults),
+            accountsStore: reloadedStore,
             claudeDiscovery: discovery
         )
-        XCTAssertEqual(second.claudeCards.first?.displayName, "Work Max")
+        // The baked card name stays the DERIVED default — a rename lives only in the registry and
+        // is resolved at render time, so a baked name can never be a stale copy of it.
+        XCTAssertEqual(second.claudeCards.first?.displayName, cardID)
+        XCTAssertEqual(reloadedStore.resolvedDisplayName(cardID: cardID), "Work Max")
     }
 
     func testAccountSwapKeepsTheOriginalCardBoundToItsOwnConfigDirectory() throws {
@@ -272,7 +276,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         let originalCard = try XCTUnwrap(assembly.claudeCards.first)
         XCTAssertEqual(originalCard.id, "claude")
         XCTAssertEqual(originalCard.configDirPath, path)
-        XCTAssertEqual(originalCard.displayName, "Personal")
+        XCTAssertEqual(originalCard.displayName, "Claude")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "Personal")
         XCTAssertNotEqual(assembly.defaultClaudeCardID, "claude")
         XCTAssertEqual(assembly.identityKeysByCard["claude"], "account-a")
         XCTAssertEqual(assembly.identityKeysByCard[assembly.defaultClaudeCardID], "account-b")

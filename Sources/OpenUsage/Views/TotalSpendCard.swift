@@ -11,6 +11,7 @@ import SwiftUI
 struct TotalSpendCard: View {
     @Environment(LayoutStore.self) private var layout
     @Environment(WidgetDataStore.self) private var dataStore
+    @Environment(AppContainer.self) private var container
     @Environment(\.colorScheme) private var colorScheme
     @Namespace private var pickerNamespace
 
@@ -36,7 +37,12 @@ struct TotalSpendCard: View {
     }
 
     private var total: TotalSpend {
-        TotalSpendAggregator.total(for: period, providers: providers, snapshots: dataStore.snapshots)
+        TotalSpendAggregator.total(
+            for: period,
+            providers: providers,
+            snapshots: dataStore.snapshots,
+            title: { container.displayName(for: $0) }
+        )
     }
 
     private var projection: TotalSpendProjection {
@@ -104,7 +110,7 @@ struct TotalSpendCard: View {
     /// hardcoded list, so disabling a provider (or a new spend provider shipping) can't make the
     /// tooltip lie about what the total reflects.
     private var infoTooltip: String {
-        let names = providers.map(\.displayName)
+        let names = providers.map { container.displayName(for: $0) }
         return "Only includes \(names.formatted(.list(type: .and)))."
     }
 
@@ -332,7 +338,7 @@ struct TotalSpendRingContent: View {
             Circle()
                 .fill(TotalSpendPalette.color(for: slice.provider.id))
                 .frame(width: 8, height: 8)
-            Text(slice.provider.displayName)
+            Text(slice.title)
                 .font(.system(size: density.supportingPointSize))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
