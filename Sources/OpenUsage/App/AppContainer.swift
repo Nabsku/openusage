@@ -449,7 +449,9 @@ final class AppContainer {
                 let observedDefaults = await observeDefaults()
                 guard !Task.isCancelled else { return }
                 checksSinceFullDiscovery += 1
-                guard !bootstrapped || observedDefaults != previousDefaults || checksSinceFullDiscovery >= 12 else {
+                guard !bootstrapped || ownershipIsQuarantined
+                    || observedDefaults != previousDefaults || checksSinceFullDiscovery >= 12
+                else {
                     continue
                 }
                 if bootstrapped && observedDefaults != previousDefaults && !ownershipIsQuarantined {
@@ -465,6 +467,10 @@ final class AppContainer {
                 })
                 guard !Task.isCancelled else { return }
                 guard prepared.isComplete else {
+                    if bootstrapped && !ownershipIsQuarantined {
+                        onOwnershipUnverified()
+                        ownershipIsQuarantined = true
+                    }
                     AppLog.warn(.config, "accounts: incomplete background discovery quarantined before reconciliation")
                     if !bootstrapped {
                         try? await Task.sleep(for: .seconds(5))
