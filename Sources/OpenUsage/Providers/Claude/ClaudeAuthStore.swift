@@ -18,6 +18,8 @@ struct ClaudeAuthStore: Sendable {
     var now: @Sendable () -> Date
     let scope: ClaudeCredentialScope
     let expectedIdentityKey: String?
+    /// Aliases explicitly verified against this card's selected credential source at launch.
+    let verifiedIdentityAliases: Set<String>
     /// Whether the `.standard` store may fall back to Claude Desktop's credentials. On by default
     /// (the historical behavior); the catalog turns it OFF once extra Claude account cards exist,
     /// because the Desktop login could belong to any of them — borrowing it unpinned could fetch one
@@ -32,6 +34,7 @@ struct ClaudeAuthStore: Sendable {
         scope: ClaudeCredentialScope = .standard,
         allowsDesktopFallback: Bool = true,
         expectedIdentityKey: String? = nil,
+        verifiedIdentityAliases: Set<String> = [],
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         now: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -43,6 +46,7 @@ struct ClaudeAuthStore: Sendable {
         self.scope = scope
         self.allowsDesktopFallback = allowsDesktopFallback
         self.expectedIdentityKey = expectedIdentityKey
+        self.verifiedIdentityAliases = verifiedIdentityAliases
         self.now = now
     }
 
@@ -127,7 +131,10 @@ struct ClaudeAuthStore: Sendable {
               let account = state.oauthAccount,
               let observed = DefaultAccountObserver.claudeIdentityKey(account)
         else { return false }
-        return observed.lowercased() == expectedIdentityKey.lowercased()
+        return observed.caseInsensitiveCompare(expectedIdentityKey) == .orderedSame
+            || verifiedIdentityAliases.contains {
+                $0.caseInsensitiveCompare(observed) == .orderedSame
+            }
     }
 
     private func applyingEnvironmentToken(to stored: [ClaudeCredentialState]) -> [ClaudeCredentialState] {

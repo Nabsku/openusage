@@ -121,7 +121,10 @@ struct ClaudeConfigDirDiscovery {
             return []
         }
         return try contents.filter {
-            try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
+            guard url.lastPathComponent == ".config" || $0.lastPathComponent.hasPrefix(".") else {
+                return false
+            }
+            return try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
         }
     }
 

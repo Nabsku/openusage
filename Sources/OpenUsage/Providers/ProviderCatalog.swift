@@ -14,6 +14,7 @@ enum ProviderCatalog {
         claudeCards: [ClaudeAccountCard] = [],
         defaultClaudeExtraLogRoots: [URL] = [],
         defaultClaudeDisplayName: String? = nil,
+        defaultClaudeVerifiedIdentityAliases: Set<String> = [],
         defaultClaudeCardID: String = "claude",
         claudeIdentityKeys: [String: String] = [:],
         isClaudeDiscoveryComplete: Bool = true
@@ -37,7 +38,8 @@ enum ProviderCatalog {
                 // returns as its own properly-pinned source kind in Phase 3.
                 authStore: ClaudeAuthStore(
                     allowsDesktopFallback: claudeCards.isEmpty && isClaudeDiscoveryComplete,
-                    expectedIdentityKey: claudeIdentityKeys[defaultClaudeCardID]
+                    expectedIdentityKey: claudeIdentityKeys[defaultClaudeCardID],
+                    verifiedIdentityAliases: defaultClaudeVerifiedIdentityAliases
                 ),
                 logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots)
             ))
@@ -68,7 +70,8 @@ enum ProviderCatalog {
             provider: ClaudeProvider.makeProvider(id: card.id, displayName: card.displayName),
             authStore: ClaudeAuthStore(
                 scope: .configDir(path: card.configDirPath, keychainLiteral: card.keychainLiteral),
-                expectedIdentityKey: card.identityKey
+                expectedIdentityKey: card.identityKey,
+                verifiedIdentityAliases: card.verifiedIdentityAliases
             ),
             logUsageScanner: ClaudeLogUsageScanner(
                 cacheIdentityOverride: "claude-account:\(card.id)",

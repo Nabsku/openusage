@@ -18,6 +18,8 @@ struct ClaudeAccountCard: Equatable, Sendable {
     var keychainLiteral: String
     /// Same-account additional config dirs (rare): extra spend-log roots, never extra credentials.
     var extraLogRoots: [URL] = []
+    /// Only identities observed at this card's verified credential source may authorize aliases.
+    var verifiedIdentityAliases: Set<String> = []
 }
 
 /// The launch-time account pass: read which account is signed in at each family's default home,
@@ -37,6 +39,8 @@ struct ProviderAccountAssembly {
     var defaultClaudeExtraLogRoots: [URL] = []
     /// The default account's derived title; custom names are resolved at presentation boundaries.
     var defaultClaudeDisplayName: String?
+    /// Identity observed at the verified default source, even when its record uses another alias.
+    var defaultClaudeVerifiedIdentityAliases: Set<String> = []
     /// The default runtime follows its account record, even when another account keeps `claude`.
     var defaultClaudeCardID = "claude"
     /// An incomplete scan cannot prove that an unpinned Desktop login belongs to the default card.
@@ -224,7 +228,15 @@ struct ProviderAccountAssembly {
             }
         }
 
+        let observedDefaultIdentity = identityKeys["claude"]
         let records = accountsStore.reconcile(with: observations)
+        for (family, observedIdentity) in Array(identityKeys) {
+            if let record = records.first(where: {
+                $0.family == family && $0.matches(identityKey: observedIdentity)
+            }) {
+                identityKeys[family] = record.identityKey
+            }
+        }
         let badgeHolder = accountsStore.defaultBadgeHolder(family: "claude")
         let defaultClaudeRecord: ProviderAccountRecord?
         switch claudeOutcome {
@@ -238,11 +250,10 @@ struct ProviderAccountAssembly {
             defaultClaudeRecord = nil
         }
         if let defaultClaudeRecord {
-            let observedDefaultIdentity = identityKeys["claude"]
             if defaultClaudeRecord.id != "claude" {
                 identityKeys.removeValue(forKey: "claude")
             }
-            identityKeys[defaultClaudeRecord.id] = observedDefaultIdentity ?? defaultClaudeRecord.identityKey
+            identityKeys[defaultClaudeRecord.id] = defaultClaudeRecord.identityKey
         }
 
         // The extra-card build plan: one card per distinct account found this launch, under its
@@ -258,12 +269,13 @@ struct ProviderAccountAssembly {
             claudeCards.append(ClaudeAccountCard(
                 id: record.id,
                 displayName: record.derivedDisplayName,
-                identityKey: account.identityKey,
+                identityKey: record.identityKey,
                 configDirPath: primary.anchorPath,
                 keychainLiteral: primary.keychainLiteral,
-                extraLogRoots: account.dirs.dropFirst().map { URL(fileURLWithPath: $0.anchorPath) }
+                extraLogRoots: account.dirs.dropFirst().map { URL(fileURLWithPath: $0.anchorPath) },
+                verifiedIdentityAliases: [primary.identityKey]
             ))
-            identityKeys[record.id] = account.identityKey
+            identityKeys[record.id] = record.identityKey
             AppLog.info(.config, "accounts: extra claude card \(record.id) from \(account.dirs.count) config dir(s)")
         }
         claudeCards.sort { $0.id < $1.id }
@@ -277,6 +289,7 @@ struct ProviderAccountAssembly {
             claudeCards: claudeCards,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
             defaultClaudeDisplayName: defaultClaudeName,
+            defaultClaudeVerifiedIdentityAliases: Set(observedDefaultIdentity.map { [$0] } ?? []),
             defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude",
             isClaudeDiscoveryComplete: isClaudeDiscoveryComplete
         )

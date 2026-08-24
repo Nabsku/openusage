@@ -62,6 +62,7 @@ public struct UsageReader {
             claudeCards: accountAssembly.claudeCards,
             defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
             defaultClaudeDisplayName: accountAssembly.defaultClaudeDisplayName,
+            defaultClaudeVerifiedIdentityAliases: accountAssembly.defaultClaudeVerifiedIdentityAliases,
             defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
             claudeIdentityKeys: accountAssembly.identityKeysByCard,
             isClaudeDiscoveryComplete: accountAssembly.isClaudeDiscoveryComplete

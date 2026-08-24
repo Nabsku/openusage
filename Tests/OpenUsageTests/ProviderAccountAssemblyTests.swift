@@ -231,14 +231,15 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         let defaults = makeScratchDefaults()
         let existing = ProviderAccountRecord(
             id: "claude", family: "claude", identityKey: "acct-1|org-1",
-            identityAliases: ["acct-1"], label: "Work",
+            identityAliases: ["acct-1"], label: "Work", customLabel: "My Work Account",
             sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
         )
         defaults.set(try JSONEncoder().encode([existing]), forKey: ProviderAccountsStore.storageKey)
         let store = ProviderAccountsStore(defaults: defaults)
+        let defaultFiles = FakeFiles(["/Users/dev/.claude.json":
+            #"{"oauthAccount":{"accountUuid":"ACCT-1"}}"#])
         let observer = DefaultAccountObserver(
-            files: FakeFiles(["/Users/dev/.claude.json":
-                #"{"oauthAccount":{"accountUuid":"ACCT-1"}}"#]),
+            files: defaultFiles,
             keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
         )
 
@@ -256,9 +257,30 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
 
         XCTAssertEqual(store.records.map(\.id), ["claude"])
-        XCTAssertEqual(assembly.identityKeysByCard["claude"], "acct-1")
+        XCTAssertEqual(assembly.identityKeysByCard["claude"], "acct-1|org-1")
+        XCTAssertEqual(assembly.defaultClaudeVerifiedIdentityAliases, ["acct-1"])
         XCTAssertTrue(assembly.claudeCards.isEmpty)
         XCTAssertEqual(assembly.defaultClaudeExtraLogRoots.map(\.path), ["/Users/dev/.claude-work"])
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "My Work Account")
+
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "alias-cache")
+        cache.store(ProviderSnapshot(providerID: "claude", displayName: "Claude", lines: []),
+                    producedByIdentityKey: existing.identityKey)
+        XCTAssertFalse(cache.hasStaleAccountStamp(
+            providerID: "claude", currentIdentityKey: assembly.identityKeysByCard["claude"]
+        ))
+
+        let runtime = try XCTUnwrap(ProviderCatalog.make(
+            defaultClaudeVerifiedIdentityAliases: assembly.defaultClaudeVerifiedIdentityAliases,
+            claudeIdentityKeys: assembly.identityKeysByCard
+        ).first as? ClaudeProvider)
+        var auth = runtime.authStore
+        auth.files = defaultFiles
+        auth.homeDirectory = { URL(fileURLWithPath: "/Users/dev") }
+        XCTAssertTrue(auth.belongsToExpectedAccount())
+        defaultFiles.files["/Users/dev/.claude.json"] =
+            #"{"oauthAccount":{"accountUuid":"ACCT-1","organizationUuid":"OTHER"}}"#
+        XCTAssertFalse(auth.belongsToExpectedAccount(), "an unverified organization must stay isolated")
     }
 
     func testAliasedConfigDirectoriesProduceOneStableNonDefaultAccountCard() throws {
@@ -292,8 +314,23 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             observer: observer, accountsStore: store, claudeDiscovery: discovery
         )
 
+        let card = try XCTUnwrap(assembly.claudeCards.first)
         XCTAssertEqual(assembly.claudeCards.map(\.id), ["claude@work"])
-        XCTAssertEqual(assembly.claudeCards.first?.identityKey, "work")
+        XCTAssertEqual(card.identityKey, "work|org")
+        XCTAssertEqual(assembly.identityKeysByCard[card.id], "work|org")
+        XCTAssertEqual(card.verifiedIdentityAliases, ["work"])
+
+        let runtime = try XCTUnwrap(ProviderCatalog.make(
+            claudeCards: assembly.claudeCards,
+            claudeIdentityKeys: assembly.identityKeysByCard
+        ).first { $0.provider.id == card.id } as? ClaudeProvider)
+        var auth = runtime.authStore
+        auth.files = FakeFiles([paths[0] + "/.claude.json":
+            #"{"oauthAccount":{"accountUuid":"work"}}"#])
+        XCTAssertTrue(auth.belongsToExpectedAccount())
+        auth.files = FakeFiles([paths[0] + "/.claude.json":
+            #"{"oauthAccount":{"accountUuid":"work","organizationUuid":"other"}}"#])
+        XCTAssertFalse(auth.belongsToExpectedAccount(), "aliases from other organizations are never authorized")
     }
 
     func testNoDefaultLoginStillAcceptsAConfigDirOnlyAccount() throws {
