@@ -513,9 +513,16 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
     }
 
-    func testOrganizationlessConfigLoginCarriesOnlyItsVerifiedIdentityAlias() throws {
-        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+    func testPersistedOrganizationlessConfigLoginPreservesItsAccountAndVerifiedAlias() throws {
+        let defaults = makeScratchDefaults()
         let path = "/Users/dev/.claude-work"
+        let existing = ProviderAccountRecord(
+            id: "claude@stable", family: "claude", identityKey: "work-user", label: "Work",
+            customLabel: "My Work Account",
+            sources: [.init(kind: .configDir, anchor: path, holdsDefaultSource: false)]
+        )
+        defaults.set(try JSONEncoder().encode([existing]), forKey: ProviderAccountsStore.storageKey)
+        let store = ProviderAccountsStore(defaults: defaults)
         let sandbox = "\(coworkBase)/local_work/.claude"
         let config = makeDiscovery(files: [
             path + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work-user"}}"#,
@@ -528,7 +535,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         let assembly = ProviderAccountAssembly.make(
             observer: makeDefaultResolvedObserver(), accountsStore: store,
-            claudeDiscovery: config, coworkDiscovery: cowork
+            claudeDiscovery: config, coworkDiscovery: cowork, hasDesktopCredentialMaterial: { _ in true }
         )
         let card = try XCTUnwrap(assembly.claudeCards.first)
         let provider = try XCTUnwrap(ProviderCatalog.make(
@@ -537,9 +544,16 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
         ).compactMap { $0 as? ClaudeProvider }.first { $0.provider.id == card.id })
 
+        XCTAssertEqual(assembly.claudeCards.map(\.id), ["claude@stable"])
+        XCTAssertEqual(card.credential, .configDir(path: path, keychainLiteral: path))
+        XCTAssertEqual(card.logRoots.map(\.path), [path, sandbox])
         XCTAssertEqual(card.identityKey, "work-user|work-org")
         XCTAssertEqual(card.verifiedIdentityAliases, [try XCTUnwrap(ClaudeIdentity("work-user"))])
         XCTAssertEqual(provider.authStore.verifiedIdentityAliases, card.verifiedIdentityAliases)
+        XCTAssertEqual(store.record(for: card.id)?.identityKey, "work-user|work-org")
+        XCTAssertEqual(store.record(for: card.id)?.identityAliases, ["work-user"])
+        XCTAssertEqual(store.resolvedDisplayName(cardID: card.id), "My Work Account")
+        XCTAssertEqual(Set(store.records.map(\.id)).count, store.records.count)
     }
 
     func testDefaultAccountSandboxesUseOnlyOwnershipVerifiedCoworkRoots() {
@@ -613,6 +627,53 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertTrue(assembly.claudeCards.isEmpty)
         XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
         XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
+    }
+
+    func testAmbiguousConfigIdentityQuarantinesCoworkDesktopAndPiSpending() throws {
+        let defaults = makeScratchDefaults()
+        let records = [
+            ProviderAccountRecord(
+                id: "claude", family: "claude", identityKey: "acct-1|org-1", label: nil,
+                sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+            ),
+            ProviderAccountRecord(
+                id: "claude@first", family: "claude", identityKey: "work|first", label: nil, sources: []
+            ),
+            ProviderAccountRecord(
+                id: "claude@second", family: "claude", identityKey: "work|second",
+                identityAliases: ["work|first"], label: nil, sources: []
+            ),
+        ]
+        defaults.set(try JSONEncoder().encode(records), forKey: ProviderAccountsStore.storageKey)
+        let path = "/Users/dev/.claude-work"
+        let config = makeDiscovery(files: [
+            path + "/.claude.json":
+                #"{"oauthAccount":{"accountUuid":"work","organizationUuid":"first"}}"#,
+            path + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"work"}}"#,
+        ], subdirectories: [path])
+        let sandbox = "\(coworkBase)/local_foreign/.claude"
+        let cowork = makeCoworkDiscovery(files: [
+            sandbox + "/.claude.json":
+                #"{"oauthAccount":{"accountUuid":"foreign","organizationUuid":"team"}}"#,
+        ], sandboxes: [sandbox])
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: makeDefaultResolvedObserver(), accountsStore: ProviderAccountsStore(defaults: defaults),
+            claudeDiscovery: config, coworkDiscovery: cowork, hasDesktopCredentialMaterial: { _ in true }
+        )
+
+        XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        XCTAssertTrue(assembly.claudeCards.isEmpty)
+        XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
+        XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
+        let provider = try XCTUnwrap(ProviderCatalog.make(
+            claudeCards: assembly.claudeCards, claudeIdentityKeys: assembly.identityKeysByCard,
+            isClaudeDiscoveryComplete: assembly.isClaudeDiscoveryComplete,
+            defaultClaudeCoworkRoots: assembly.defaultClaudeCoworkRoots,
+            defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
+        ).first as? ClaudeProvider)
+        XCTAssertFalse(provider.allowsUnattributedPiUsage)
+        XCTAssertEqual(provider.authStore.desktopAccessPolicy, .denied)
     }
 
     func testADistinctCoworkAccountBecomesOneDesktopBackedCardAndPartitionsTheWalk() throws {

@@ -243,11 +243,12 @@ struct ProviderAccountAssembly {
                 }
                 guard records.count <= 1 else {
                     isClaudeDiscoveryComplete = false
+                    defaultClaudeCoworkRoots = []
                     order.removeAll()
                     grouped.removeAll()
                     break
                 }
-                let identityKey = records.first?.identityKey ?? canonical
+                let identityKey = canonical
                 if grouped[identityKey] == nil { order.append(identityKey) }
                 grouped[identityKey, default: []].append(finding)
             }
@@ -458,7 +459,11 @@ struct ProviderAccountAssembly {
         let allowsActiveOrganization = (isClaudeDiscoveryComplete || allowsUnownedDesktop)
             && !desktopPolicy.hasMultipleAccounts
             && plannedCards.isEmpty
-        let desktopAccess = if let defaultKey = identityKeys[defaultClaudeRecord?.id ?? "claude"] {
+        let desktopAccess: ClaudeDesktopAccessPolicy = if !isClaudeDiscoveryComplete
+            && !allowsUnownedDesktop
+        {
+            .denied
+        } else if let defaultKey = identityKeys[defaultClaudeRecord?.id ?? "claude"] {
             desktopPolicy.access(for: defaultKey, allowsActiveOrganization: allowsActiveOrganization)
         } else {
             allowsActiveOrganization && !records.contains { $0.family == "claude" }
