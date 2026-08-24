@@ -36,6 +36,7 @@ struct ClaudeAccountCard: Equatable, Sendable {
 struct PreparedProviderAccountDiscovery: Sendable {
     var config: ClaudeConfigDirDiscovery.Result
     var cowork: ClaudeCoworkDiscovery.Result
+    var desktopAccountUUID: String? = nil
 
     var isComplete: Bool { !config.truncated && !cowork.truncated }
 }
@@ -385,7 +386,9 @@ struct ProviderAccountAssembly {
                     continue
                 }
                 guard let user = ClaudeIdentity(identityKey)?.user,
-                      hasDesktopCredentialMaterial(user),
+                      preparedDiscovery.map({
+                          $0.desktopAccountUUID?.caseInsensitiveCompare(user) == .orderedSame
+                      }) ?? hasDesktopCredentialMaterial(user),
                       desktopPolicy.access(for: identityKey, allowsActiveOrganization: false)
                           == .pinned(organization)
                 else {

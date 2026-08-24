@@ -6,11 +6,13 @@ final class AccountRuntimeLifecycleTests: XCTestCase {
     func testAccountFilesystemScansRunOffTheMainThread() async {
         let prepared = await AppContainer.prepareAccountDiscovery(
             configScan: { .init(notes: [Thread.isMainThread ? "main" : "background"]) },
-            coworkScan: { .init(notes: [Thread.isMainThread ? "main" : "background"]) }
+            coworkScan: { .init(notes: [Thread.isMainThread ? "main" : "background"]) },
+            desktopAccount: { Thread.isMainThread ? "main" : "background" }
         )
 
         XCTAssertEqual(prepared.config.notes, ["background"])
         XCTAssertEqual(prepared.cowork.notes, ["background"])
+        XCTAssertEqual(prepared.desktopAccountUUID, "background")
         XCTAssertTrue(prepared.isComplete)
     }
 

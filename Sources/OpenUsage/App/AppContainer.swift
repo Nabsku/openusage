@@ -513,6 +513,10 @@ final class AppContainer {
         },
         coworkScan: @escaping @Sendable () -> ClaudeCoworkDiscovery.Result = {
             ClaudeCoworkDiscovery().run()
+        },
+        desktopAccount: @escaping @Sendable () -> String? = {
+            let desktop = ClaudeDesktopAuthStore()
+            return desktop.hasCredentialMaterial() ? desktop.lastKnownAccountUUID() : nil
         }
     ) async -> PreparedProviderAccountDiscovery {
         let task = Task.detached(priority: .utility) {
@@ -525,7 +529,13 @@ final class AppContainer {
             guard !Task.isCancelled, !config.truncated else {
                 return PreparedProviderAccountDiscovery(config: config, cowork: .init(truncated: true))
             }
-            return PreparedProviderAccountDiscovery(config: config, cowork: coworkScan())
+            let cowork = coworkScan()
+            guard !Task.isCancelled, !cowork.truncated else {
+                return PreparedProviderAccountDiscovery(config: config, cowork: cowork)
+            }
+            return PreparedProviderAccountDiscovery(
+                config: config, cowork: cowork, desktopAccountUUID: desktopAccount()
+            )
         }
         return await withTaskCancellationHandler {
             await task.value
