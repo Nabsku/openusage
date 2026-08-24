@@ -320,7 +320,7 @@ struct ClaudeAuthStore: Sendable {
             return ["\(base)-\(hashSuffix(keychainLiteral))"]
         case .standard:
             if let configDir = claudeHomeOverride() {
-                return ["\(base)-\(hashSuffix(configDir))", base]
+                return ["\(base)-\(hashSuffix(configDir))"]
             }
             return [base]
         }

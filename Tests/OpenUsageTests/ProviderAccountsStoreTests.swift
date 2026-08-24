@@ -60,6 +60,26 @@ final class ProviderAccountsStoreTests: XCTestCase {
         XCTAssertNotNil(defaults.data(forKey: ProviderAccountsStore.storageKey))
     }
 
+    func testUnknownFutureSourceSurvivesDecodingReconciliationAndPersistence() throws {
+        let defaults = makeScratchDefaults()
+        let future = ProviderAccountSource.Kind(rawValue: "desktop")
+        let existing = ProviderAccountRecord(
+            id: "claude", family: "claude", identityKey: "account-a", label: "Personal",
+            sources: [
+                .init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true),
+                .init(kind: future, anchor: nil, holdsDefaultSource: false),
+            ]
+        )
+        defaults.set(try JSONEncoder().encode([existing]), forKey: ProviderAccountsStore.storageKey)
+
+        let store = ProviderAccountsStore(defaults: defaults)
+        store.reconcile(with: [defaultHomeObservation(family: "claude", identityKey: "account-a")])
+
+        let restored = try XCTUnwrap(ProviderAccountsStore(defaults: defaults).records.first)
+        XCTAssertEqual(restored.identityKey, "account-a")
+        XCTAssertEqual(restored.sources.map(\.kind.rawValue), ["defaultHome", "desktop"])
+    }
+
     func testSwappedDefaultMintsAHashIDAndTakesTheBadge() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         store.reconcile(with: [defaultHomeObservation(family: "claude", identityKey: "acct-a")])

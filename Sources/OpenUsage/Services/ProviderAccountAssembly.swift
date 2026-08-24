@@ -156,7 +156,7 @@ struct ProviderAccountAssembly {
                 }
                 var order: [String] = []
                 var grouped: [String: [ClaudeConfigDirDiscovery.Finding]] = [:]
-                for finding in scan.findings {
+                for finding in scan.findings where isClaudeDiscoveryComplete {
                     if grouped[finding.identityKey] == nil { order.append(finding.identityKey) }
                     grouped[finding.identityKey, default: []].append(finding)
                 }

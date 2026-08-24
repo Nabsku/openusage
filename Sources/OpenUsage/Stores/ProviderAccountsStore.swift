@@ -39,11 +39,26 @@ enum ProviderAccountID {
 /// a swap re-points source edges, cards don't move. Phase 1 only observes the default home; later
 /// phases add config dirs, cswap vault slots, Codex homes, and Desktop logins as more kinds.
 struct ProviderAccountSource: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable {
-        /// The provider's standard home for this machine (`~/.claude`, `~/.codex`, env override).
-        case defaultHome
-        /// A custom Claude config dir (a `CLAUDE_CONFIG_DIR` home kept besides the default).
-        case configDir
+    struct Kind: RawRepresentable, Codable, Equatable, Hashable, Sendable {
+        static let defaultHome = Self(rawValue: "defaultHome")
+        static let configDir = Self(rawValue: "configDir")
+
+        let rawValue: String
+
+        init(rawValue: String) {
+            self.rawValue = rawValue
+        }
+
+        init(from decoder: Decoder) throws {
+            rawValue = try decoder.singleValueContainer().decode(String.self)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
+
+        var isKnown: Bool { self == .defaultHome || self == .configDir }
     }
 
     var kind: Kind
@@ -176,7 +191,7 @@ final class ProviderAccountsStore {
                 guard !updated[index].removedTombstone else { continue }
                 var record = updated[index]
                 record.label = observation.label ?? record.label
-                record.sources = observation.sources
+                record.sources = observation.sources + record.sources.filter { !$0.kind.isKnown }
                 if record != updated[index] {
                     updated[index] = record
                     changed = true

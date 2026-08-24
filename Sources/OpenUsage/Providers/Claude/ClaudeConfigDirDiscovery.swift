@@ -36,7 +36,7 @@ struct ClaudeConfigDirDiscovery {
     var files: TextFileAccessing
     var keychain: KeychainAccessing
     var homeDirectory: @Sendable () -> URL
-    var listSubdirectories: @Sendable (URL) -> [URL]
+    var listSubdirectories: @Sendable (URL) throws -> [URL]
     /// Wall-clock budget; on overrun the scan returns what it has (and the next launch resumes).
     var timeBudget: TimeInterval
     var now: @Sendable () -> Date
@@ -46,7 +46,7 @@ struct ClaudeConfigDirDiscovery {
         files: TextFileAccessing = LocalTextFileAccessor(),
         keychain: KeychainAccessing = SecurityKeychainAccessor(),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
-        listSubdirectories: @escaping @Sendable (URL) -> [URL] = Self.filesystemSubdirectories,
+        listSubdirectories: @escaping @Sendable (URL) throws -> [URL] = Self.filesystemSubdirectories,
         timeBudget: TimeInterval = 0.4,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -64,12 +64,26 @@ struct ClaudeConfigDirDiscovery {
         var result = Result()
         let excluded = Set(defaultClaudeConfigDirs().map(canonical))
         let preferred = Set(preferredAnchors.map(canonical))
-        let candidates = candidateDirectories().sorted { first, second in
-            let firstIsPreferred = preferred.contains(canonical(first.path))
-            let secondIsPreferred = preferred.contains(canonical(second.path))
-            return firstIsPreferred == secondIsPreferred
-                ? first.path < second.path
-                : firstIsPreferred
+        guard !Task.isCancelled, now().timeIntervalSince(started) <= timeBudget else {
+            result.notes.append("claude config-dir scan ended before enumeration; account ownership remains incomplete")
+            result.truncated = true
+            return result
+        }
+        let candidates: [URL]
+        do {
+            candidates = try candidateDirectories().sorted { first, second in
+                let firstIsPreferred = preferred.contains(canonical(first.path))
+                let secondIsPreferred = preferred.contains(canonical(second.path))
+                return firstIsPreferred == secondIsPreferred
+                    ? first.path < second.path
+                    : firstIsPreferred
+            }
+        } catch {
+            let message = "claude config-dir enumeration failed; account ownership remains incomplete: \(error.localizedDescription)"
+            AppLog.error(.config, message)
+            result.notes.append(message)
+            result.truncated = true
+            return result
         }
 
         for candidate in candidates {
@@ -79,9 +93,10 @@ struct ClaudeConfigDirDiscovery {
                 break
             }
             guard !excluded.contains(canonical(candidate.path)) else { continue }
-            if let finding = claudeCandidate(at: candidate, notes: &result.notes) {
+            if let finding = claudeCandidate(at: candidate, result: &result) {
                 result.findings.append(finding)
             }
+            if result.truncated { break }
         }
         return result
     }
@@ -89,30 +104,38 @@ struct ClaudeConfigDirDiscovery {
     // MARK: - Candidates
 
     /// Dot-dirs at `~` plus dirs under `~/.config`, in stable path order.
-    private func candidateDirectories() -> [URL] {
+    private func candidateDirectories() throws -> [URL] {
         let home = homeDirectory()
-        var candidates = listSubdirectories(home).filter { $0.lastPathComponent.hasPrefix(".") }
-        candidates += listSubdirectories(home.appendingPathComponent(".config"))
-        return candidates.sorted { $0.path < $1.path }
+        var candidates = try listSubdirectories(home).filter { $0.lastPathComponent.hasPrefix(".") }
+        candidates += try listSubdirectories(home.appendingPathComponent(".config"))
+        return candidates
     }
 
-    private static func filesystemSubdirectories(of url: URL) -> [URL] {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: []
-        )) ?? []
-        return contents.filter {
-            (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+    private static func filesystemSubdirectories(of url: URL) throws -> [URL] {
+        let contents: [URL]
+        do {
+            contents = try FileManager.default.contentsOfDirectory(
+                at: url, includingPropertiesForKeys: [.isDirectoryKey], options: []
+            )
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return []
+        }
+        return try contents.filter {
+            try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
         }
     }
 
-    private func claudeCandidate(at url: URL, notes: inout [String]) -> Finding? {
+    private func claudeCandidate(at url: URL, result: inout Result) -> Finding? {
         // Pre-gate: only dirs that carry an identity file at all enter the trail — everything else
         // is a random dot-dir and stays out of the log. (A custom config dir keeps its state INSIDE
         // the dir; only the default `~/.claude` keeps it next door at `~/.claude.json`, and the
         // default homes are excluded before this runs.)
-        guard let identityText = try? files.readTextIfPresent(url.path + "/.claude.json") else {
+        let identityText: String
+        do {
+            guard let text = try files.readTextIfPresent(url.path + "/.claude.json") else { return nil }
+            identityText = text
+        } catch {
+            recordReadFailure(error, candidate: url, result: &result)
             return nil
         }
         guard let parsed = try? JSONDecoder().decode(
@@ -121,15 +144,21 @@ struct ClaudeConfigDirDiscovery {
               let account = parsed.oauthAccount,
               let key = DefaultAccountObserver.claudeIdentityKey(account)
         else {
-            notes.append("claude candidate \(logPath(url.path)): identity file present but names no account → skipped")
+            result.notes.append("claude candidate \(logPath(url.path)): identity file present but names no account → skipped")
             return nil
         }
 
         // Credential shape: the dir's own `.credentials.json`, or its *computed* keychain item.
         // Claude Code hashes the literal CLAUDE_CONFIG_DIR string, so every plausible spelling of
         // this path is probed (attributes only — no secret, no prompt).
-        let fileBacked = (try? files.readTextIfPresent(url.path + "/.credentials.json"))
-            .flatMap { $0 }
+        let credentialsText: String?
+        do {
+            credentialsText = try files.readTextIfPresent(url.path + "/.credentials.json")
+        } catch {
+            recordReadFailure(error, candidate: url, result: &result)
+            return nil
+        }
+        let fileBacked = credentialsText
             .flatMap { ClaudeAuthStore.parseCredentials($0) }?
             .claudeAiOauth?.accessToken?.nilIfEmpty != nil
 
@@ -146,17 +175,24 @@ struct ClaudeConfigDirDiscovery {
             }
         }
         guard fileBacked || matchedLiteral != nil else {
-            notes.append("claude candidate \(logPath(url.path)): identity \(hash8(key)) but no credential (no .credentials.json, no keychain item for \(literals.count) path spellings) → skipped")
+            result.notes.append("claude candidate \(logPath(url.path)): identity \(hash8(key)) but no credential (no .credentials.json, no keychain item for \(literals.count) path spellings) → skipped")
             return nil
         }
 
-        notes.append("claude candidate \(logPath(url.path)): accepted (\(hash8(key)), \(fileBacked ? "file" : "keychain") credential)")
+        result.notes.append("claude candidate \(logPath(url.path)): accepted (\(hash8(key)), \(fileBacked ? "file" : "keychain") credential)")
         return Finding(
             identityKey: key,
             label: DefaultAccountObserver.claudeIdentityLabel(account),
             anchorPath: url.path,
             keychainLiteral: matchedLiteral ?? url.path
         )
+    }
+
+    private func recordReadFailure(_ error: Error, candidate: URL, result: inout Result) {
+        let message = "claude candidate \(logPath(candidate.path)): account files unreadable; ownership remains incomplete: \(error.localizedDescription)"
+        AppLog.error(.config, message)
+        result.notes.append(message)
+        result.truncated = true
     }
 
     /// Every plausible spelling Claude Code might have hashed for this dir's keychain item: the path

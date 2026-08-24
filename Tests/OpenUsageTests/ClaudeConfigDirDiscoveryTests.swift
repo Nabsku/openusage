@@ -121,4 +121,33 @@ final class ClaudeConfigDirDiscoveryTests: XCTestCase {
         XCTAssertTrue(result.truncated)
         XCTAssertTrue(result.findings.isEmpty)
     }
+
+    func testEnumerationFailureExplicitlyMarksOwnershipAsIncomplete() {
+        let discovery = ClaudeConfigDirDiscovery(
+            environment: FakeEnvironment(), files: FakeFiles(), keychain: ServiceKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSubdirectories: { _ in throw CocoaError(.fileReadNoPermission) }
+        )
+
+        let result = discovery.run()
+
+        XCTAssertTrue(result.truncated)
+        XCTAssertTrue(result.findings.isEmpty)
+        XCTAssertEqual(result.notes.count, 1)
+    }
+
+    func testUnreadableAccountFileExplicitlyMarksOwnershipAsIncomplete() {
+        let path = "/Users/dev/.claude-work"
+        let discovery = ClaudeConfigDirDiscovery(
+            environment: FakeEnvironment(),
+            files: UnreadableFiles(present: [path + "/.claude.json"]),
+            keychain: ServiceKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSubdirectories: { _ in [URL(fileURLWithPath: path)] }
+        )
+
+        let result = discovery.run()
+
+        XCTAssertTrue(result.truncated)
+        XCTAssertTrue(result.findings.isEmpty)
+    }
 }

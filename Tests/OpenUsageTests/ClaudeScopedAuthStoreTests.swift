@@ -46,6 +46,25 @@ final class ClaudeScopedAuthStoreTests: XCTestCase {
         XCTAssertFalse(candidates.contains { $0.source == .environment })
     }
 
+    func testStandardCustomHomeNeverBorrowsAnotherAccountsBareKeychain() {
+        let literal = "~/.claude-work"
+        let environment = FakeEnvironment(["CLAUDE_CONFIG_DIR": literal])
+        let scoped = ClaudeAuthStore.scopedKeychainServiceName(
+            forConfigDirLiteral: literal, environment: environment
+        )
+        let bare = ClaudeAuthStore.baseKeychainServiceName(environment: environment)
+        let store = ClaudeAuthStore(
+            environment: environment,
+            files: FakeFiles([literal + "/.credentials.json":
+                #"{"claudeAiOauth":{"accessToken":"own-account"}}"#]),
+            keychain: ServiceKeychain(currentUserValues: [bare:
+                #"{"claudeAiOauth":{"accessToken":"another-account"}}"#])
+        )
+
+        XCTAssertEqual(store.keychainServiceCandidates(), [scoped])
+        XCTAssertEqual(store.loadCredentialCandidates().map(\.oauth.accessToken), ["own-account"])
+    }
+
     func testFootprintProbeSeesFileAndKeychainShapesWithoutReadingSecrets() {
         let scopedService = ClaudeAuthStore.scopedKeychainServiceName(
             forConfigDirLiteral: "~/.claude-work", environment: FakeEnvironment([:])
