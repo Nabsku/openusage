@@ -7,10 +7,11 @@ existing file after app preferences are reset or the app is reinstalled. There i
 pairing code, or separate account.
 
 The file contains normalized daily tokens and spend, model totals, and unknown-model names for sources
-that are local to one Mac: Claude, Codex, Grok, and OpenCode. It does not contain credentials, account
-limits, raw logs, or provider responses. Cursor's history is already account-wide, so it stays local and
-is never added across Macs. Disabling a provider immediately removes its peer contributions from the
-combined view and omits it from this Mac's next iCloud write, while its local cached snapshot remains.
+that are local to one Mac: Antigravity, Claude, Codex, Grok, and OpenCode. It does not contain
+credentials, account limits, raw logs, or provider responses. Cursor's history is already account-wide,
+so it stays local and is never added across Macs. Disabling a provider immediately removes its peer
+contributions from the combined view and omits it from this Mac's next iCloud write, while its local
+cached snapshot remains.
 
 OpenUsage combines the valid files in memory and rebuilds Today, Yesterday, Last 30 Days, Usage Trend,
 unknown-model warnings, and model breakdowns. The same combined spend rows feed the dashboard, Total
@@ -26,22 +27,42 @@ receive it, especially while offline. Downloaded changes reload immediately when
 
 ## Multiple accounts across Macs
 
-Histories match by **account**, not by card name. Each Mac's file records which account every card
-belongs to (an opaque account/organization identifier — never an email), so the same account merges into
-the same card everywhere, even when one Mac shows it as the main card and another as an extra account
-card.
+Histories match by **account**, not by card name. Each Mac's private iCloud file records the stable
+account and organization identifiers supplied by the provider, so the same account merges into the same
+card everywhere, even when one Mac shows it as the main card and another as an extra account card.
+Claude account histories still match when one Mac omits an organization ID and the other includes it,
+but only when all known identities establish exactly one possible organization. If multiple
+organizations could match, that history is left out until its owner can be verified.
+These identifiers are stored as supplied, not hashed, but never include an email address, account name,
+login credential, plan, or quota.
 
-An account you use on another Mac but have no login for here doesn't become a card: it appears as its
-own slice in **Total Spend** ("Claude · Mac mini"), so the number at the top is the whole truth across
-your Macs. The moment you log that account in locally, its card appears with the full cross-machine
-history already attached.
+OpenUsage only combines account history when both Macs identify its owner. If either Mac cannot
+identify an account, two cards claim the same account, or an older Mac sends account history without
+identity information, that history is temporarily left out instead of being assigned to the wrong
+card. Once the account can be identified, its history joins the matching card again. A Codex login kept
+in the system keychain proves its identity during its normal successful refresh, so its history starts
+syncing afterward without an extra Keychain read or a new permission prompt. If that same verified
+login refreshes its access token or temporarily stops reporting its account identifier, syncing
+continues; a different login without an identifiable owner stays excluded until its account can be
+verified.
 
-Macs running an older OpenUsage read their own format but report this Mac's newer file as "update
-OpenUsage" — update both sides to sync multi-account machines.
+An account you use on another Mac but have no login for here doesn't become a card. If this Mac already
+has another enabled, verified account from the same provider, the remote account appears as its own
+slice in **Total Spend**, named by its account code ("claude@ab12cd34"). The code is derived from the
+account identity; an account that was a Mac's original Claude login can still keep the plain `claude`
+card ID there. When you log that account in locally, its verified identity attaches the full
+cross-machine history to the correct card regardless of which ID that card has.
+
+Update every syncing Mac together. Older OpenUsage builds reject the entire newer account-aware history
+file, including other providers, and report that OpenUsage needs updating. Newer builds can still read
+older files, but leave their Claude and Codex histories out because those accounts cannot be identified;
+eligible non-account providers from older files still merge on the newer Mac.
 
 Settings lists each valid device file with the time that Mac generated it. To remove a Mac from the
 combined summary, turn sync off on that Mac; this deletes its file from iCloud. Turning sync off also
-stops that Mac from reading peers and immediately returns every surface there to local-only spend.
+stops that Mac from reading peers and immediately returns every surface there to local-only spend,
+even when a signed-in account changes at the same time. Pending updates from a previous account cannot
+replace the current account's synced history.
 Malformed files are ignored and reported in Settings and the app log.
 
 ## Development and release setup

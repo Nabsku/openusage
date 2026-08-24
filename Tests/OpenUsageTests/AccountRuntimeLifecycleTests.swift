@@ -159,3 +159,44 @@ final class StatusItemShortcutLifecycleTests: XCTestCase {
         XCTAssertEqual(KeyboardShortcuts.getShortcut(for: name), shortcut)
     }
 }
+
+@MainActor
+final class WidgetAccountIdentityCapabilityTests: XCTestCase {
+    func testAccountIdentityCapabilityStampsAndQuarantinesAnyReportingProvider() async {
+        let runtime = IdentityReportingProvider()
+        let suiteName = "OpenUsageTests.PortableAccountIdentity.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots", ttl: 600)
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [runtime.provider], descriptors: []),
+            providers: [runtime], cache: cache, defaults: defaults
+        )
+
+        await store.refresh(providerID: runtime.provider.id, force: true)
+        XCTAssertEqual(cache.producedByIdentityKey(providerID: runtime.provider.id), "account-a")
+
+        runtime.nextIdentity = (nil, Data("credential-b".utf8))
+        await store.refresh(providerID: runtime.provider.id, force: true)
+        XCTAssertNil(cache.producedByIdentityKey(providerID: runtime.provider.id))
+    }
+}
+
+@MainActor
+private final class IdentityReportingProvider: ProviderRuntime, AccountIdentityReporting {
+    let provider = Provider(id: "portable-account", displayName: "Portable", icon: .providerMark("codex"))
+    let widgetDescriptors: [WidgetDescriptor] = []
+    var verifiedAccountIdentityKey: String? = "account-a"
+    var accountOwnershipContinuityToken: Data? = Data("credential-a".utf8)
+    var nextIdentity: (key: String?, token: Data)?
+
+    func refresh() async -> ProviderSnapshot {
+        if let nextIdentity {
+            verifiedAccountIdentityKey = nextIdentity.key
+            accountOwnershipContinuityToken = nextIdentity.token
+        }
+        return ProviderSnapshot(providerID: provider.id, displayName: provider.displayName, lines: [])
+    }
+
+    func hasLocalCredentials() async -> Bool { true }
+}

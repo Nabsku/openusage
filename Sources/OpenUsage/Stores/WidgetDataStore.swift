@@ -33,14 +33,12 @@ final class WidgetDataStore {
     /// Quota-notification preferences (three independent triggers). Injected; `nil` disables
     /// notifications entirely (tests and previews that don't wire it).
     private let notificationSettings: (@MainActor () -> NotificationSettingsStore)?
-    /// Card id → the account identity currently signed in there, resolved once at launch by
-    /// `ProviderAccountAssembly`. Drives the snapshot cache's account stamp: writes record the
-    /// producer, and launch loads only paint an entry whose stamp matches. A card absent here has an
-    /// unresolved identity this launch (or isn't account-aware) — its cache behaves as it always did.
-    private let providerIdentityKeys: [String: String]
-    /// The live card title for a card id, `nil` for non-account providers — the account-registry
-    /// name resolver, injected by `AppContainer` so notification titles carry renames. `nil`
-    /// (tests, the one-shot CLI) falls back to the baked derived name.
+    /// Card id → the account identity currently signed in there. Launch discovery seeds verified
+    /// identities; a successful Codex refresh can later prove a keychain-backed account without
+    /// adding a launch-time keychain read. Cache stamps and cloud routing use the current value.
+    @ObservationIgnored private var providerIdentityKeys: [String: String]
+    /// Resolves account-card names from the live account registry, so a rename reaches notifications
+    /// without being copied into cached snapshots or immutable provider values.
     private let resolveDisplayName: (@MainActor (String) -> String?)?
     /// Where a fired milestone is delivered: `(idPrefix, title, subtitle, body) -> Bool`. The Bool is
     /// whether it was actually delivered (authorized + scheduled); on false the caller leaves the
@@ -105,8 +103,8 @@ final class WidgetDataStore {
     /// Wired by `ICloudUsageSyncStore`; debounced there so a concurrent provider batch produces one file.
     @ObservationIgnored var onLocalHistoryChanged: (@MainActor () -> Void)?
     @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
-    /// Accounts synced from other Macs that have NO card here: surfaced in Total Spend only (their
-    /// synthesized snapshots carry the usual Today/Yesterday/Last 30 Days lines), never as cards.
+    /// Verified accounts found only on another Mac. They contribute to Total Spend but never create
+    /// local provider cards or borrow a local account's identity.
     private(set) var remoteOnlySpend: [(provider: Provider, snapshot: ProviderSnapshot)] = []
 
     /// Global meter style: whether every bounded tile (and the menu-bar value) renders as "used" or
@@ -321,6 +319,8 @@ final class WidgetDataStore {
         refreshingProviderIDs.insert(providerID)
         defer { refreshingProviderIDs.remove(providerID) }
         let start = monotonicNow()
+        let accountIdentityReporter = provider as? any AccountIdentityReporting
+        let previousAccountOwnershipToken = accountIdentityReporter?.accountOwnershipContinuityToken
         // A provider that never returns would otherwise hold the in-flight entry — and the spinner —
         // forever. Past the deadline, stop waiting and treat it as any other failed refresh.
         guard var snapshot = await ProviderRefreshDeadline.snapshot(
@@ -362,6 +362,27 @@ final class WidgetDataStore {
         }
         // Recovered: drop any backoff so the provider resumes the normal cadence immediately.
         failureRetryAfter[providerID] = nil
+
+        if let accountIdentityReporter {
+            if let verifiedIdentity = accountIdentityReporter.verifiedAccountIdentityKey {
+                if providerIdentityKeys[providerID] != verifiedIdentity {
+                    // A snapshot loaded while this identity was unknown, or produced by a different
+                    // account, must never supply carry-forward history to the newly verified account.
+                    localSnapshots.removeValue(forKey: providerID)
+                    providerIdentityKeys[providerID] = verifiedIdentity
+                    AppLog.info(.config, "accounts: \(providerID) identity updated from its successful credential")
+                }
+            } else if let previousOwnershipToken = previousAccountOwnershipToken,
+                      previousOwnershipToken != accountIdentityReporter.accountOwnershipContinuityToken
+            {
+                // Missing account metadata is harmless while the same credential still succeeds,
+                // but a different identityless credential may belong to another account entirely.
+                localSnapshots.removeValue(forKey: providerID)
+                providerIdentityKeys.removeValue(forKey: providerID)
+                AppLog.warn(.config, "accounts: \(providerID) credential changed without a verified identity; history quarantined")
+            }
+        }
+
         // A provider can refresh its live limits successfully while its optional local log/CSV scan
         // produces no result. Keep only the last-good normalized history in that case; the new plan,
         // limits, warnings, and timestamp still win. A non-nil empty history remains authoritative and
@@ -426,14 +447,11 @@ final class WidgetDataStore {
     func localHistoryDocument(deviceID: String, deviceName: String, updatedAt: Date = Date()) -> UsageHistoryDocument {
         var providers: [String: ProviderUsageHistory] = [:]
         var identities: [String: String] = [:]
-        // Every machine-local card syncs — account cards included. Their ids are identity-derived,
-        // so they mean the same account on every Mac; the identities map additionally lets peers
-        // match a default card's history to whatever card that account is over there (see
-        // `PeerHistoryRemapper`).
         for (providerID, descriptor) in registry.historyDescriptorsByProvider
         where descriptor.scope == .machineLocal && isProviderEnabled(providerID) {
             if let history = localSnapshots[providerID]?.usageHistory {
-                if ProviderAccountID.families.contains(ProviderAccountID.family(of: providerID)) {
+                let family = ProviderAccountID.family(of: providerID)
+                if ProviderAccountID.families.contains(family) {
                     guard let identity = providerIdentityKeys[providerID] else {
                         AppLog.warn(.config, "sync: omitting unresolved account history for \(providerID)")
                         continue
@@ -464,16 +482,13 @@ final class WidgetDataStore {
         ) { result, entry in
             if isProviderEnabled(entry.key) { result[entry.key] = entry.value }
         }
-        // Match peers by account identity, not card id — the same account can be the default card
-        // on one Mac and an extra account card on another. Whatever matches no local card at all
-        // becomes a Total Spend-only remote entry below.
         let remapped = PeerHistoryRemapper.remap(
             documents: peerHistoryDocuments,
             localIdentityByCardID: providerIdentityKeys,
             localAccountCardIDs: Set(registry.providers.map(\.id))
         )
         if !remapped.quarantined.isEmpty {
-            AppLog.warn(.config, "sync: quarantined \(remapped.quarantined.count) unverified peer account histories")
+            AppLog.warn(.config, "sync: quarantined \(remapped.quarantined.count) peer account histories with unresolved or ambiguous ownership")
         }
         let merged = UsageHistoryAggregator.merged(
             localSnapshots: localSnapshots,
@@ -508,9 +523,6 @@ final class WidgetDataStore {
         snapshots = rendered
     }
 
-    /// Synthesize Total Spend entries for accounts that exist only on other Macs: a pseudo provider
-    /// (family icon, "Claude · Mac mini" name) plus a snapshot carrying the standard spend-tile
-    /// lines, rendered from the merged remote history by the same renderer real cards use.
     private static func renderRemoteOnlySpend(
         _ remoteOnly: [PeerHistoryRemapper.RemoteOnlyHistory],
         registry: WidgetRegistry,
@@ -518,13 +530,14 @@ final class WidgetDataStore {
         now: Date
     ) -> [(provider: Provider, snapshot: ProviderSnapshot)] {
         remoteOnly.compactMap { entry in
-            guard let familyProvider = registry.providers.first(where: {
-                      ProviderAccountID.family(of: $0.id) == entry.family
-                          && isProviderEnabled($0.id)
-                          && registry.historyDescriptorsByProvider[$0.id]?.scope == .machineLocal
-                  }),
+            guard let familyProvider = registry.providers.first(where: { provider in
+                ProviderAccountID.family(of: provider.id) == entry.family
+                    && isProviderEnabled(provider.id)
+                    && registry.historyDescriptorsByProvider[provider.id]?.scope == .machineLocal
+            }),
                   let descriptor = registry.historyDescriptorsByProvider[familyProvider.id]
             else { return nil }
+
             let history = UsageHistoryAggregator.mergeHistories(entry.histories, now: now)
             guard !history.series.daily.isEmpty else { return nil }
 

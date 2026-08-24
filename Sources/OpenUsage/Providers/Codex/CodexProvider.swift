@@ -1,7 +1,8 @@
+import CryptoKit
 import Foundation
 
 @MainActor
-final class CodexProvider: ProviderRuntime {
+final class CodexProvider: ProviderRuntime, AccountIdentityReporting {
     let provider = Provider(
         id: "codex",
         displayName: "Codex",
@@ -17,6 +18,19 @@ final class CodexProvider: ProviderRuntime {
     let logUsageScanner: CodexLogUsageScanner
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
+    /// Identity proven by the credential that produced the most recent successful snapshot.
+    /// Keychain-backed accounts cannot be identified during prompt-free launch discovery, but a
+    /// normal refresh already reads that credential and can safely expose its account id afterward.
+    private(set) var lastSuccessfulIdentityKey: String?
+    /// In-memory lineage anchor for the winning credential or its independently identified auth-file
+    /// precursor. Access tokens routinely rotate, so the anchor survives an overlapping access/refresh
+    /// token or an OAuth exchange we perform ourselves; file seeding never exposes a successful identity.
+    private(set) var lastSuccessfulCredentialFingerprint: Data?
+    private var trackedAccessTokenFingerprint: Data?
+    private var trackedRefreshTokenFingerprint: Data?
+
+    var verifiedAccountIdentityKey: String? { lastSuccessfulIdentityKey }
+    var accountOwnershipContinuityToken: Data? { lastSuccessfulCredentialFingerprint }
 
     init(
         authStore: CodexAuthStore = CodexAuthStore(),
@@ -30,6 +44,7 @@ final class CodexProvider: ProviderRuntime {
         self.logUsageScanner = logUsageScanner
         self.now = now
         self.pricing = pricing
+        seedIdentifiedFileCredential()
     }
 
     var widgetDescriptors: [WidgetDescriptor] {
@@ -102,6 +117,7 @@ final class CodexProvider: ProviderRuntime {
 
     private func probe(authState initialState: CodexAuthState) async throws -> ProviderSnapshot {
         var authState = initialState
+        var continuesSuccessfulCredential = matchesLastSuccessfulCredential(authState.auth)
         guard var accessToken = authState.auth.tokens?.accessToken, !accessToken.isEmpty else {
             if authState.auth.apiKey?.isEmpty == false {
                 throw CodexAuthError.usageAPIKey
@@ -117,6 +133,9 @@ final class CodexProvider: ProviderRuntime {
                let liveToken = live.auth.tokens?.accessToken, !liveToken.isEmpty {
                 authState = live
                 accessToken = liveToken
+                // The same file or Keychain entry can have been replaced by another login. Its
+                // location alone proves nothing, so re-establish continuity from its actual tokens.
+                continuesSuccessfulCredential = matchesLastSuccessfulCredential(live.auth)
             }
         }
 
@@ -164,6 +183,16 @@ final class CodexProvider: ProviderRuntime {
         }
 
         MetricLine.appendNoDataIfNeeded(&mapped.lines)
+        lastSuccessfulIdentityKey = Self.accountIdentityKey(from: authState.auth)
+        let accessFingerprint = Self.credentialFingerprint(currentToken)
+        let refreshFingerprint = authState.auth.tokens?.refreshToken.flatMap { token in
+            token.isEmpty ? nil : Self.credentialFingerprint(token)
+        }
+        if !continuesSuccessfulCredential || lastSuccessfulCredentialFingerprint == nil {
+            lastSuccessfulCredentialFingerprint = refreshFingerprint ?? accessFingerprint
+        }
+        trackedAccessTokenFingerprint = accessFingerprint
+        trackedRefreshTokenFingerprint = refreshFingerprint
         return ProviderSnapshot.make(
             provider: provider,
             plan: mapped.plan,
@@ -171,6 +200,61 @@ final class CodexProvider: ProviderRuntime {
             refreshedAt: now(),
             usageHistory: usageHistory
         )
+    }
+
+    private static func accountIdentityKey(from auth: CodexAuth) -> String? {
+        if let accountID = auth.tokens?.accountID?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        {
+            return accountID.lowercased()
+        }
+        for token in [auth.tokens?.idToken, auth.tokens?.accessToken].compactMap({ $0 }) {
+            if let accountID = DefaultAccountObserver.chatGPTAccountID(
+                inIDTokenPayload: ProviderParse.jwtPayload(token)
+            ) {
+                return accountID.lowercased()
+            }
+        }
+        return nil
+    }
+
+    private func seedIdentifiedFileCredential() {
+        // Launch discovery already reads this local file and can name its account without touching
+        // the Keychain. Preserve only token digests, so a newly appearing fallback login cannot
+        // inherit that launch account before its own identity has been verified by a successful API.
+        guard let candidate = authStore.loadAuthCandidates().first(where: {
+            $0.hasUsableAccessToken && Self.accountIdentityKey(from: $0.auth) != nil
+        }),
+              let accessToken = candidate.auth.tokens?.accessToken, !accessToken.isEmpty
+        else { return }
+
+        let accessFingerprint = Self.credentialFingerprint(accessToken)
+        let refreshFingerprint = candidate.auth.tokens?.refreshToken.flatMap { token in
+            token.isEmpty ? nil : Self.credentialFingerprint(token)
+        }
+        lastSuccessfulCredentialFingerprint = refreshFingerprint ?? accessFingerprint
+        trackedAccessTokenFingerprint = accessFingerprint
+        trackedRefreshTokenFingerprint = refreshFingerprint
+    }
+
+    private func matchesLastSuccessfulCredential(_ auth: CodexAuth) -> Bool {
+        guard lastSuccessfulCredentialFingerprint != nil else { return false }
+
+        if let accessToken = auth.tokens?.accessToken, !accessToken.isEmpty,
+           Self.credentialFingerprint(accessToken) == trackedAccessTokenFingerprint
+        {
+            return true
+        }
+        if let refreshToken = auth.tokens?.refreshToken, !refreshToken.isEmpty,
+           Self.credentialFingerprint(refreshToken) == trackedRefreshTokenFingerprint
+        {
+            return true
+        }
+        return false
+    }
+
+    private static func credentialFingerprint(_ token: String) -> Data {
+        Data(SHA256.hash(data: Data(token.utf8)))
     }
 
     /// Fetches the on-demand reset-credit balance (and per-credit expiry) without ever failing the

@@ -38,6 +38,14 @@ protocol ProviderRuntime: AnyObject {
     func hasLocalCredentials() async -> Bool
 }
 
+/// Optional account-ownership evidence produced by a successful provider refresh. The continuity
+/// value is opaque to consumers; each provider owns whatever credential-lineage proof it requires.
+@MainActor
+protocol AccountIdentityReporting: AnyObject {
+    var verifiedAccountIdentityKey: String? { get }
+    var accountOwnershipContinuityToken: Data? { get }
+}
+
 /// Run a blocking, `Sendable` credential load off the MainActor.
 ///
 /// Auth stores read credentials via the `security` (keychain) and `sqlite3` CLIs, whose `ProcessRunner`

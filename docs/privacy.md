@@ -15,6 +15,9 @@ app and macOS version, which providers and metrics you have enabled, and which m
 to the menu bar or tucked behind the "show more" caret. A random ID (not tied to you or any account)
 lets us count daily active users without identifying anyone.
 
+When a provider has multiple accounts, analytics report only the provider and metric names. Account
+identifiers, account-specific card identifiers, and the number of accounts are never included.
+
 - **Crash reports** — if OpenUsage crashes, it saves a report and sends it the next time you open the
   app: the technical stack trace (which parts of *OpenUsage's own code* were running when it crashed)
   plus the app and macOS version. This contains no account details, credentials, or usage values —
@@ -62,10 +65,12 @@ identity caches that have not been used for 35 days are removed. OpenUsage's pri
 the cache is read, so its computed aggregates and totals are not persisted in this cache.
 
 If you explicitly turn on [iCloud Sync](icloud-sync.md), OpenUsage writes normalized daily tokens,
-spend, and model totals to its private iCloud container so your own Macs can show one combined summary.
-Credentials, account limits, provider responses, and raw logs are never written there. This is separate
-from anonymous usage analytics: iCloud Sync defaults off and uses your iCloud account, while the
-analytics toggle controls extra PostHog events, not daily activity or crash reports.
+spend, model totals, and provider-issued account and organization identifiers to its private iCloud
+container so your own Macs can match the right accounts. Those identifiers are stored as supplied by
+the provider; email addresses, account names, credentials, account limits, provider responses, and raw
+logs are never written there. This is separate from anonymous usage analytics: iCloud Sync defaults off
+and uses your iCloud account, while the analytics toggle controls extra PostHog events, not daily
+activity or crash reports.
 
 ## How it works
 
