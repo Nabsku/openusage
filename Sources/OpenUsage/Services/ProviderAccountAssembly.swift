@@ -279,10 +279,13 @@ struct ProviderAccountAssembly {
             for note in scan.notes {
                 AppLog.info(.config, "discovery: \(note)")
             }
+            if scan.truncated {
+                defaultClaudeCoworkRoots = []
+            }
             var defaultBucket: [URL] = []
             var order: [String] = []
             var grouped: [String: [ClaudeCoworkDiscovery.Sandbox]] = [:]
-            for sandbox in scan.sandboxes {
+            for sandbox in scan.truncated ? [] : scan.sandboxes {
                 guard let key = sandbox.identityKey, key != defaultKey else {
                     // An unidentified sandbox counts on the default card, exactly where the
                     // built-in walk has always put it.

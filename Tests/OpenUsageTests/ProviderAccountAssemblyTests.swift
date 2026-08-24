@@ -409,6 +409,28 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertNil(assembly.defaultClaudeCoworkRoots, "no partition — the scanner's built-in walk stays byte-identical")
     }
 
+    func testIncompleteCoworkWalkCannotCreateCardsOrMisattributeSpend() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let sandbox = "\(coworkBase)/local_1/.claude"
+        let cowork = ClaudeCoworkDiscovery(
+            files: FakeFiles([
+                sandbox + "/.claude.json":
+                    #"{"oauthAccount":{"accountUuid":"ACCT-2","organizationUuid":"ORG-2"}}"#,
+            ]),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSandboxes: { _ in [URL(fileURLWithPath: sandbox)] },
+            timeBudget: -1
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork
+        )
+
+        XCTAssertTrue(assembly.claudeCards.isEmpty)
+        XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
+        XCTAssertEqual(store.records.count, 1)
+    }
+
     func testADistinctCoworkAccountBecomesOneDesktopBackedCardAndPartitionsTheWalk() throws {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         let mine = "\(coworkBase)/local_1/.claude"
