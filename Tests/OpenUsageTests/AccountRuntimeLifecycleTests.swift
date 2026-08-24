@@ -39,6 +39,7 @@ final class AccountRuntimeLifecycleTests: XCTestCase {
 
         XCTAssertEqual(accounts.defaultBadgeHolder(family: "claude")?.identityKey, "original")
         XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
         XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
     }
 

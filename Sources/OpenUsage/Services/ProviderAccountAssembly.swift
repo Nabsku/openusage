@@ -152,6 +152,7 @@ struct ProviderAccountAssembly {
                 identityKeysByCard: [:],
                 allowsUnboundClaudeFallback: !accountsStore.records.contains { $0.family == "claude" },
                 isClaudeDiscoveryComplete: false,
+                defaultClaudeCoworkRoots: [],
                 defaultClaudeDesktopAccess: .denied
             )
         }

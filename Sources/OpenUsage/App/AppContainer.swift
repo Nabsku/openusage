@@ -71,6 +71,7 @@ final class AppContainer {
             identityKeysByCard: [:],
             allowsUnboundClaudeFallback: !accounts.records.contains { $0.family == "claude" },
             isClaudeDiscoveryComplete: false,
+            defaultClaudeCoworkRoots: [],
             defaultClaudeDesktopAccess: .denied
         )
         self.accounts = accounts
@@ -161,6 +162,7 @@ final class AppContainer {
                     identityKeysByCard: [:],
                     allowsUnboundClaudeFallback: !self.accounts.records.contains { $0.family == "claude" },
                     isClaudeDiscoveryComplete: false,
+                    defaultClaudeCoworkRoots: [],
                     defaultClaudeDesktopAccess: .denied
                 )
                 self.replaceAccountRuntime(with: quarantined, quarantinesUnverifiedAccountData: true)
