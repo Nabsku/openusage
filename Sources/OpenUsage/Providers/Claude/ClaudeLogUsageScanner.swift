@@ -29,15 +29,16 @@ actor ClaudeLogUsageScanner {
     /// Extra account cards pin the scan to exactly their config dir(s), replacing the standard
     /// resolution (env override, XDG, `~/.claude`, Cowork sandboxes) entirely — another account's
     /// logs must never bleed into a scoped card. `nil` keeps the standard walk byte-identical.
-    private let rootsOverride: [URL]?
+    private var rootsOverride: [URL]?
     /// Same-account custom config dirs appended to the DEFAULT card's standard roots, so spend the
     /// user's own login produced in a side home still counts on its card.
-    private let additionalRoots: [URL]
+    private var additionalRoots: [URL]
     /// When set, replaces the built-in Cowork sandbox walk: `[]` for scoped account cards (Cowork
     /// logs belong to the account that produced them, not this card), the account's partition of the
     /// walk otherwise. `nil` keeps the built-in walk byte-identical (a machine where every sandbox
     /// belongs to the default login).
-    private let coworkRootsOverride: [URL]?
+    private var coworkRootsOverride: [URL]?
+    private var rootRoutingGeneration = 0
 
     /// One parsed usage line. Token buckets are pre-normalized into `TokenBreakdown`; dedup fields
     /// ride along so the global dedup pass can run over cached entries.
@@ -87,10 +88,29 @@ actor ClaudeLogUsageScanner {
         self.coworkRootsOverride = coworkRootsOverride
     }
 
+    @discardableResult
+    func updateLogRoots(
+        rootsOverride: [URL]?,
+        additionalRoots: [URL],
+        coworkRootsOverride: [URL]?
+    ) -> Bool {
+        guard self.rootsOverride != rootsOverride
+            || self.additionalRoots != additionalRoots
+            || self.coworkRootsOverride != coworkRootsOverride
+        else { return false }
+        precondition(rootsOverride == nil || cacheIdentityOverride != nil)
+        self.rootsOverride = rootsOverride
+        self.additionalRoots = additionalRoots
+        self.coworkRootsOverride = coworkRootsOverride
+        rootRoutingGeneration += 1
+        return true
+    }
+
     /// Scan the last `daysBack` days of Claude logs. Returns `nil` when no Claude data directory or
     /// no log files exist (the spend tiles then render "No data"); returns an empty series when logs
     /// exist but have no usage in the window.
     func scan(daysBack: Int = 30, now: Date = Date(), pricing: ModelPricing) async -> LogUsageScan? {
+        let generation = rootRoutingGeneration
         let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
         let cacheIdentity = parseCacheIdentity()
         let roots = claudeRoots()
@@ -115,7 +135,7 @@ actor ClaudeLogUsageScanner {
             since: since,
             cacheIdentity: cacheIdentity,
             parse: Self.parseFile
-        ), !Task.isCancelled else { return nil }
+        ), !Task.isCancelled, generation == rootRoutingGeneration else { return nil }
         return Self.aggregate(entries: Self.dedup(entries), since: since, pricing: pricing)
     }
 

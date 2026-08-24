@@ -23,13 +23,24 @@ enum FirstRunSeeder {
         isFreshInstall: Bool,
         providers: [ProviderRuntime],
         enablement: ProviderEnablementStore,
-        onboarding: OnboardingStore
+        onboarding: OnboardingStore,
+        deferDetectionUntilDiscovery: Bool = false
     ) -> Task<Void, Never>? {
         guard isFreshInstall, enablement.enabledIDs == nil else { return nil }
 
         // Persist the unfinished job before marking providers known, so an interrupted launch can
         // still distinguish an outstanding first-run check from a completed one.
-        let task = seedFallbackThenDetect(providers: providers, enablement: enablement, logPrefix: "first run")
+        let task: Task<Void, Never>?
+        if deferDetectionUntilDiscovery {
+            let providerIDs = Set(providers.map(\.provider.id))
+            let fallback = fallbackProviderIDs.intersection(providerIDs)
+            enablement.seedEnabledProviders(fallback)
+            enablement.beginProviderDetection(providerIDs, mode: .replacement, baseline: fallback)
+            AppLog.info(.config, "first run: seeded providers \(fallback.sorted()); awaiting verified account discovery")
+            task = nil
+        } else {
+            task = seedFallbackThenDetect(providers: providers, enablement: enablement, logPrefix: "first run")
+        }
         enablement.registerKnownProviders(Set(providers.map(\.provider.id)))
         onboarding.markCustomizeHintPending()
         return task

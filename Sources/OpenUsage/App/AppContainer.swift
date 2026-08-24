@@ -64,11 +64,15 @@ final class AppContainer {
         // Once the capture lands, persist its identity-relevant facts so the NEXT launch has them
         // even if that launch's own capture is slow (see `ShellEnvironmentSnapshot`).
         self.shellEnvironmentSnapshotTask = ShellEnvironmentSnapshotStore(defaults: .standard).startRefreshTask()
-        // The launch account pass: which account is signed in at each family's default home, plus
-        // the config-dir scan for extra Claude logins. Feeds the snapshot cache's account stamp,
-        // reconciles the account registry, and hands the catalog its extra-card build plan.
+        // The status item appears from a quarantined local-only graph immediately; the expensive
+        // filesystem walks and first credential detection wait for the verified background bootstrap.
         let accounts = ProviderAccountsStore()
-        let accountAssembly = ProviderAccountAssembly.make(accountsStore: accounts, waitsForLoginShell: true)
+        let accountAssembly = ProviderAccountAssembly(
+            identityKeysByCard: [:],
+            allowsUnboundClaudeFallback: !accounts.records.contains { $0.family == "claude" },
+            isClaudeDiscoveryComplete: false,
+            defaultClaudeDesktopAccess: .denied
+        )
         self.accounts = accounts
 
         let enablement = ProviderEnablementStore()
@@ -77,6 +81,7 @@ final class AppContainer {
             assembly: accountAssembly, accounts: accounts,
             enablement: enablement, notificationSettings: notificationSettings
         )
+        runtime.iCloudSync.shutdownForAccountGraphReload()
         let providers = runtime.providers
         let dataStore = runtime.dataStore
         let accountGraph = AccountRuntimeGraph(state: runtime)
@@ -84,18 +89,13 @@ final class AppContainer {
         // Fresh installs start minimal: seed the enabled-provider list (Claude/Codex/Cursor right away,
         // then the detected set once the local credential probe finishes). No-op on every later launch.
         let onboarding = OnboardingStore()
-        let seedTask = FirstRunSeeder.seedIfNeeded(
+        FirstRunSeeder.seedIfNeeded(
             isFreshInstall: isFreshInstall,
             providers: providers,
             enablement: enablement,
-            onboarding: onboarding
+            onboarding: onboarding,
+            deferDetectionUntilDiscovery: true
         )
-        // Providers added by an update get the same credential detection on their first launch — enabled
-        // only when the user actually has the tool. Runs every launch; a no-op unless the registry has a
-        // provider this install has never seen (fresh installs were just baselined by FirstRunSeeder).
-        let newProviderTask = seedTask == nil
-            ? NewProviderSeeder.reconcileIfNeeded(providers: providers, enablement: enablement)
-            : nil
         self.onboarding = onboarding
         self.enablement = enablement
         self.notificationSettings = notificationSettings
@@ -147,15 +147,12 @@ final class AppContainer {
             // exactly like every UI surface.
             .resolvingDisplayNames(accounts.resolvedDisplayNamesByCardID)
         })
-        accountGraph.runtimeTasks = AccountRuntimeTaskLifetime([
-            Self.startPeriodicRefresh(dataStore: dataStore, telemetry: telemetry),
-            seedTask,
-            newProviderTask,
-        ])
         localAPI.start()
         accountGraph.accountWatcher = AccountRuntimeTaskLifetime([
             Self.startAccountGraphWatch(accounts: accounts, initialAssembly: accountAssembly) { [weak self] assembly in
                 self?.replaceAccountRuntime(with: assembly)
+            } onLogRootsChanged: { [weak self] assembly in
+                await self?.updateAccountLogRouting(with: assembly)
             },
         ])
         // Become the notification-center delegate so banners show while frontmost — a menu-bar accessory
@@ -287,20 +284,48 @@ final class AppContainer {
         AppLog.info(.config, "accounts: account runtimes updated without replacing app services")
     }
 
+    private func updateAccountLogRouting(with assembly: ProviderAccountAssembly) async {
+        var updatedProviderIDs: [String] = []
+        for provider in providers.compactMap({ $0 as? ClaudeProvider }) {
+            guard !Task.isCancelled else { return }
+            let updated: Bool
+            if let card = assembly.claudeCards.first(where: { $0.id == provider.provider.id }) {
+                updated = await provider.logUsageScanner.updateLogRoots(
+                    rootsOverride: card.logRoots, additionalRoots: [], coworkRootsOverride: nil
+                )
+            } else if provider.provider.id == assembly.defaultClaudeCardID {
+                updated = await provider.logUsageScanner.updateLogRoots(
+                    rootsOverride: nil,
+                    additionalRoots: assembly.defaultClaudeExtraLogRoots,
+                    coworkRootsOverride: assembly.defaultClaudeCoworkRoots
+                )
+            } else {
+                continue
+            }
+            if updated { updatedProviderIDs.append(provider.provider.id) }
+        }
+        for providerID in updatedProviderIDs {
+            guard !Task.isCancelled else { return }
+            await dataStore.refresh(providerID: providerID, force: true)
+        }
+        if !updatedProviderIDs.isEmpty {
+            AppLog.info(.config, "accounts: refreshed log routes for \(updatedProviderIDs.count) existing account(s)")
+        }
+    }
+
     struct AccountOwnershipFingerprint: Equatable {
         struct Card: Equatable {
             var id: String
             var identityKey: String
             var verifiedIdentityAliases: Set<ClaudeIdentity>
             var credential: ClaudeAccountCard.Credential
-            var logRoots: Set<URL>
         }
 
         var identities: [String: String]
         var cards: [Card]
-        var defaultClaudeExtraLogRoots: Set<URL>
-        var defaultClaudeCoworkRoots: Set<URL>?
+        var defaultClaudeCardID: String
         var allowsUnboundClaudeFallback: Bool
+        var isClaudeDiscoveryComplete: Bool
         var defaultClaudeVerifiedIdentityAliases: Set<ClaudeIdentity>
         var desktopAccess: ClaudeDesktopAccessPolicy
 
@@ -309,42 +334,90 @@ final class AppContainer {
             cards = assembly.claudeCards.map {
                 Card(
                     id: $0.id, identityKey: $0.identityKey,
-                    verifiedIdentityAliases: $0.verifiedIdentityAliases, credential: $0.credential,
-                    logRoots: Set($0.logRoots)
+                    verifiedIdentityAliases: $0.verifiedIdentityAliases, credential: $0.credential
                 )
             }
-            defaultClaudeExtraLogRoots = Set(assembly.defaultClaudeExtraLogRoots)
-            defaultClaudeCoworkRoots = assembly.defaultClaudeCoworkRoots.map { Set($0) }
+            defaultClaudeCardID = assembly.defaultClaudeCardID
             allowsUnboundClaudeFallback = assembly.allowsUnboundClaudeFallback
+            isClaudeDiscoveryComplete = assembly.isClaudeDiscoveryComplete
             defaultClaudeVerifiedIdentityAliases = assembly.defaultClaudeVerifiedIdentityAliases
             desktopAccess = assembly.defaultClaudeDesktopAccess
+        }
+    }
+
+    struct AccountLogRoutingFingerprint: Equatable {
+        var rootsByCard: [String: Set<URL>]
+        var defaultCardID: String
+        var defaultExtraRoots: Set<URL>
+        var defaultCoworkRoots: Set<URL>?
+
+        init(_ assembly: ProviderAccountAssembly) {
+            rootsByCard = Dictionary(uniqueKeysWithValues: assembly.claudeCards.map {
+                ($0.id, Set($0.logRoots))
+            })
+            defaultCardID = assembly.defaultClaudeCardID
+            defaultExtraRoots = Set(assembly.defaultClaudeExtraLogRoots)
+            defaultCoworkRoots = assembly.defaultClaudeCoworkRoots.map { Set($0) }
+        }
+
+        func reassignsExistingRoots(from previous: Self) -> Bool {
+            var ownersByRoot: [URL: String] = [:]
+            for (cardID, roots) in rootsByCard {
+                for root in roots { ownersByRoot[root] = cardID }
+            }
+            for root in defaultExtraRoots.union(defaultCoworkRoots ?? []) {
+                ownersByRoot[root] = defaultCardID
+            }
+            for (cardID, roots) in previous.rootsByCard {
+                if roots.contains(where: { ownersByRoot[$0].map { $0 != cardID } ?? false }) {
+                    return true
+                }
+            }
+            return previous.defaultExtraRoots.union(previous.defaultCoworkRoots ?? []).contains {
+                ownersByRoot[$0].map { $0 != previous.defaultCardID } ?? false
+            }
         }
     }
 
     private static func startAccountGraphWatch(
         accounts: ProviderAccountsStore,
         initialAssembly: ProviderAccountAssembly,
-        onChange: @escaping @MainActor (ProviderAccountAssembly) -> Void
+        onChange: @escaping @MainActor (ProviderAccountAssembly) -> Void,
+        onLogRootsChanged: @escaping @MainActor (ProviderAccountAssembly) async -> Void
     ) -> Task<Void, Never> {
-        func observeDefaults() -> [String: DefaultAccountObserver.Outcome] {
-            let observer = DefaultAccountObserver()
-            return ["claude": observer.observeClaude(), "codex": observer.observeCodex()]
+        func observeDefaults() async -> [String: DefaultAccountObserver.Outcome] {
+            await loadOffMainActor {
+                let observer = DefaultAccountObserver()
+                return ["claude": observer.observeClaude(), "codex": observer.observeCodex()]
+            }
         }
 
-        let initialDefaults = observeDefaults()
         return Task { @MainActor in
-            var previousDefaults = initialDefaults
+            let shellReady = await loadOffMainActor { LoginShellEnvironment.shared.ensureCaptured() }
+            guard !Task.isCancelled else { return }
+            guard shellReady || ShellEnvironmentSnapshotStore.launchSnapshot != nil else {
+                AppLog.error(.config, "accounts: login shell unavailable; retaining quarantined startup graph")
+                return
+            }
+            var previousDefaults: [String: DefaultAccountObserver.Outcome] = [:]
             var previousOwnership = AccountOwnershipFingerprint(initialAssembly)
+            var previousRouting = AccountLogRoutingFingerprint(initialAssembly)
             var checksSinceFullDiscovery = 0
+            var bootstrapped = false
             while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(5))
-                } catch {
-                    return
+                if bootstrapped {
+                    do {
+                        try await Task.sleep(for: .seconds(5))
+                    } catch {
+                        return
+                    }
                 }
-                let observedDefaults = observeDefaults()
+                let observedDefaults = await observeDefaults()
+                guard !Task.isCancelled else { return }
                 checksSinceFullDiscovery += 1
-                guard observedDefaults != previousDefaults || checksSinceFullDiscovery >= 12 else { continue }
+                guard !bootstrapped || observedDefaults != previousDefaults || checksSinceFullDiscovery >= 12 else {
+                    continue
+                }
                 previousDefaults = observedDefaults
                 checksSinceFullDiscovery = 0
                 let preferredAnchors = Set(accounts.records.flatMap { record in
@@ -356,9 +429,12 @@ final class AppContainer {
                 guard !Task.isCancelled else { return }
                 guard prepared.isComplete else {
                     AppLog.warn(.config, "accounts: incomplete background discovery quarantined before reconciliation")
+                    if !bootstrapped {
+                        try? await Task.sleep(for: .seconds(5))
+                    }
                     continue
                 }
-                guard observeDefaults() == observedDefaults else {
+                guard await observeDefaults() == observedDefaults else {
                     AppLog.info(.config, "accounts: default login changed during discovery; retrying")
                     continue
                 }
@@ -367,9 +443,19 @@ final class AppContainer {
                 )
                 guard !Task.isCancelled else { return }
                 let ownership = AccountOwnershipFingerprint(assembly)
-                guard ownership != previousOwnership else { continue }
+                let routing = AccountLogRoutingFingerprint(assembly)
+                let replacesGraph = !bootstrapped
+                    || ownership != previousOwnership
+                    || routing.reassignsExistingRoots(from: previousRouting)
+                guard replacesGraph || routing != previousRouting else { continue }
+                bootstrapped = true
                 previousOwnership = ownership
-                onChange(assembly)
+                previousRouting = routing
+                if replacesGraph {
+                    onChange(assembly)
+                } else {
+                    await onLogRootsChanged(assembly)
+                }
             }
         }
     }

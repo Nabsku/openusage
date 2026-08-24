@@ -564,8 +564,16 @@ final class ClaudeLogUsageScannerTests: XCTestCase {
             environment: FakeEnvironment([:]),
             homeDirectory: { home },
             incrementalScanner: IncrementalJSONLScanner<Entry>(),
-            coworkRootsOverride: [mine]
+            coworkRootsOverride: []
         )
+
+        let initialResult = await scanner.scan(now: now, pricing: pricing)
+        let beforeRoutingUpdate = try XCTUnwrap(initialResult)
+        XCTAssertEqual(beforeRoutingUpdate.series.daily[0].totalTokens, 150)
+        let updated = await scanner.updateLogRoots(
+            rootsOverride: nil, additionalRoots: [], coworkRootsOverride: [mine]
+        )
+        XCTAssertTrue(updated)
 
         let result = await scanner.scan(now: now, pricing: pricing)
         let scan = try XCTUnwrap(result)

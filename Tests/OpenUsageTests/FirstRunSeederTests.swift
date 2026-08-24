@@ -46,6 +46,37 @@ final class FirstRunSeederTests: XCTestCase {
         XCTAssertEqual(enablement.enabledIDs, ["claude", "codex", "cursor"])
     }
 
+    func testDeferredFirstRunDetectionWaitsForVerifiedDesktopAccount() async throws {
+        let enablement = ProviderEnablementStore(defaults: makeDefaults("deferred-desktop"))
+        let onboarding = OnboardingStore(defaults: makeDefaults("deferred-desktop-onboarding"))
+        let provisional: [ProviderRuntime] = [
+            stub("claude", hasCredentials: false),
+            stub("codex", hasCredentials: true),
+            stub("cursor", hasCredentials: false),
+        ]
+
+        let deferred = FirstRunSeeder.seedIfNeeded(
+            isFreshInstall: true, providers: provisional, enablement: enablement,
+            onboarding: onboarding, deferDetectionUntilDiscovery: true
+        )
+
+        XCTAssertNil(deferred)
+        XCTAssertEqual(enablement.enabledIDs, ["claude", "codex", "cursor"])
+        XCTAssertEqual(enablement.detectionJob?.mode, .replacement)
+
+        let verified: [ProviderRuntime] = [
+            stub("claude@desktop", hasCredentials: true),
+            stub("codex", hasCredentials: true),
+            stub("cursor", hasCredentials: false),
+        ]
+        let resumed = try XCTUnwrap(NewProviderSeeder.reconcileIfNeeded(
+            providers: verified, enablement: enablement
+        ))
+        await resumed.value
+
+        XCTAssertEqual(enablement.enabledIDs, ["claude@desktop", "codex"])
+    }
+
     func testExistingInstallIsNeverSeeded() async {
         let enablement = ProviderEnablementStore(defaults: makeDefaults("existing"))
         let onboarding = OnboardingStore(defaults: makeDefaults("existing-onboarding"))

@@ -40,7 +40,7 @@ final class AccountRuntimeLifecycleTests: XCTestCase {
         XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
     }
 
-    func testAnySessionRootChangeInvalidatesAccountRuntimeFingerprint() {
+    func testSessionRootChangesUpdateRoutingWithoutReplacingAccountOwnership() {
         let account = ClaudeAccountCard(
             id: "claude@team", displayName: "Team", identityKey: "person|team",
             credential: .desktop(organization: "team"),
@@ -57,11 +57,19 @@ final class AccountRuntimeLifecycleTests: XCTestCase {
         updatedConfig.defaultClaudeExtraLogRoots.append(URL(fileURLWithPath: "/tmp/another-config"))
         var updatedCowork = first
         updatedCowork.defaultClaudeCoworkRoots?.append(URL(fileURLWithPath: "/tmp/another-cowork"))
-        let original = AppContainer.AccountOwnershipFingerprint(first)
+        let ownership = AppContainer.AccountOwnershipFingerprint(first)
+        let routing = AppContainer.AccountLogRoutingFingerprint(first)
 
-        XCTAssertNotEqual(original, .init(updatedCard))
-        XCTAssertNotEqual(original, .init(updatedConfig))
-        XCTAssertNotEqual(original, .init(updatedCowork))
+        for update in [updatedCard, updatedConfig, updatedCowork] {
+            XCTAssertEqual(ownership, .init(update))
+            XCTAssertNotEqual(routing, .init(update))
+            XCTAssertFalse(AppContainer.AccountLogRoutingFingerprint(update).reassignsExistingRoots(from: routing))
+        }
+
+        var changedOwner = first
+        changedOwner.claudeCards[0].logRoots.append(URL(fileURLWithPath: "/tmp/default-cowork"))
+        changedOwner.defaultClaudeCoworkRoots = []
+        XCTAssertTrue(AppContainer.AccountLogRoutingFingerprint(changedOwner).reassignsExistingRoots(from: routing))
     }
 
     func testCancellationAfterConfigScanNeverRunsCoworkDiscovery() async {
