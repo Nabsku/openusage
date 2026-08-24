@@ -15,6 +15,8 @@ The same detection runs for providers that arrive later. On the first launch aft
 
 This check happens **once per provider**. After that, the provider is yours to manage: if you turn it off, no update will ever turn it back on, and installing the tool later won't flip it on behind your back either — head to Customize when you want it.
 
+If your account changes while a check is still running, OpenUsage resumes that unfinished check after rebuilding the account list. It never repeats a completed check or overrides a provider switch you changed yourself.
+
 ## Your choices always stick
 
 Everything you set in Customize — providers on or off, metric layout, menu-bar stars — carries across updates untouched. The only thing an update may ever change is turning **on** a provider you have never seen before, and only when you actually have that tool installed.
@@ -27,6 +29,7 @@ The app persists three small lists in its settings:
 
 - **Enabled providers** — the providers currently on. This is the source of truth the dashboard and menu bar read.
 - **Known providers** — every provider this install has ever seen. This is what makes "new in this update" distinguishable from "you turned it off": a provider missing from the enabled list but present in the known list is a deliberate choice, and is left alone. Only providers missing from *both* get the credential check, and each is marked known immediately so the check never repeats.
+- **Pending checks** — providers whose first credential check has started but hasn't finished yet. This short-lived list lets an interrupted check resume without turning a completed check into a recurring one.
 - Each provider implements a cheap, local-only credential probe (`hasLocalCredentials()`) — the same files, keychain entries, saved keys, and environment variables its normal refresh reads, never the network.
 
 Older installs (from before first-run detection existed) started with every provider on and stored only the ones turned *off*. A one-time settings migration converts them to the lists above with the exact same providers on and off as before — nothing visibly changes on the launch that migrates; those installs simply join the same new-provider detection from then on.

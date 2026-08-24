@@ -11,6 +11,7 @@ import SwiftUI
 struct TotalSpendCard: View {
     @Environment(LayoutStore.self) private var layout
     @Environment(WidgetDataStore.self) private var dataStore
+    @Environment(AppContainer.self) private var container
     @Environment(\.colorScheme) private var colorScheme
     @Namespace private var pickerNamespace
 
@@ -36,7 +37,23 @@ struct TotalSpendCard: View {
     }
 
     private var total: TotalSpend {
-        TotalSpendAggregator.total(for: period, providers: providers, snapshots: dataStore.snapshots)
+        // Accounts that live only on other Macs (synced, no card here) count toward the total and
+        // get their own legend slice ("claude@ab12cd34") — the number should be the whole truth
+        // even when a login isn't set up on this machine.
+        var aggregatedProviders = providers
+        var aggregatedSnapshots = dataStore.snapshots
+        for entry in dataStore.remoteOnlySpend {
+            aggregatedProviders.append(entry.provider)
+            aggregatedSnapshots[entry.provider.id] = entry.snapshot
+        }
+        // Titles resolve here — the one place with registry access — so the legend AND the share
+        // export (rendered outside the environment) carry live renames.
+        return TotalSpendAggregator.total(
+            for: period,
+            providers: aggregatedProviders,
+            snapshots: aggregatedSnapshots,
+            title: { container.displayName(for: $0) }
+        )
     }
 
     private var projection: TotalSpendProjection {
@@ -104,7 +121,8 @@ struct TotalSpendCard: View {
     /// hardcoded list, so disabling a provider (or a new spend provider shipping) can't make the
     /// tooltip lie about what the total reflects.
     private var infoTooltip: String {
-        let names = providers.map(\.displayName)
+        let names = providers.map { container.displayName(for: $0) }
+            + dataStore.remoteOnlySpend.map(\.provider.displayName)
         return "Only includes \(names.formatted(.list(type: .and)))."
     }
 
@@ -332,7 +350,7 @@ struct TotalSpendRingContent: View {
             Circle()
                 .fill(TotalSpendPalette.color(for: slice.provider.id))
                 .frame(width: 8, height: 8)
-            Text(slice.provider.displayName)
+            Text(slice.title)
                 .font(.system(size: density.supportingPointSize))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -365,63 +383,5 @@ struct TotalSpendRingContent: View {
         case .costPerMtok:
             return MetricFormatter.costPerMtok(value, style: style)
         }
-    }
-}
-
-/// Stable per-provider brand tints for the Total Spend ring and legend — the one place the app maps
-/// a provider to a color, so the chart, legend, and share card always agree. Colors are keyed by
-/// provider ID only (never by rank or position), so a provider keeps its color across period
-/// switches, re-sorts, and launches. Hexes come from the legacy edition's per-plugin `brandColor`
-/// values; brands whose color is plain black (Cursor, Grok) get adaptive near-black/near-white
-/// dynamic colors so they read on both appearances without both landing on the same gray.
-enum TotalSpendPalette {
-    private static let byProviderID: [String: Color] = [
-        "claude": hex(0xDE7356),                             // Claude terracotta
-        "codex": hex(0x10A37F),                              // OpenAI green (#10A37F)
-        "cursor": dynamic(light: 0x13120A, dark: 0xF5F5F7),  // brand black (#13120A), flipped near-white in dark mode
-        "grok": dynamic(light: 0x8E8E93, dark: 0x98989D),    // brand black, offset to gray next to Cursor
-        "opencode": dynamic(light: 0x6E6E73, dark: 0xAEAEB2),  // OpenCode — grayscale brand, medium gray
-        "openrouter": hex(0x6467F2),                         // OpenRouter indigo
-        "antigravity": hex(0x4285F4),                        // Google blue
-        "copilot": hex(0xA855F7),                            // Copilot purple
-        "amp": hex(0xF34E3F),
-        "factory": dynamic(light: 0x48484A, dark: 0xC7C7CC),
-        "kimi": hex(0x0A66FF),
-        "minimax": hex(0xF5433C),
-        "zai": dynamic(light: 0x2D2D2D, dark: 0xD1D1D6)
-    ]
-
-    /// Deterministic backstop hues for a provider that ships without a palette entry — keyed off the
-    /// provider ID (not rank), so the color holds steady across periods and launches.
-    private static let fallback: [Color] = [
-        hex(0x34C759), hex(0x5856D6), hex(0xFF2D55), hex(0xA2845E)
-    ]
-
-    static func color(for providerID: String) -> Color {
-        if let brand = byProviderID[providerID] { return brand }
-        let stableHash = providerID.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
-        return fallback[stableHash % fallback.count]
-    }
-
-    private static func hex(_ value: UInt32) -> Color {
-        Color(
-            red: Double((value >> 16) & 0xFF) / 255,
-            green: Double((value >> 8) & 0xFF) / 255,
-            blue: Double(value & 0xFF) / 255
-        )
-    }
-
-    /// A light/dark-adaptive color, for brands whose mark is pure black — invisible on a dark card
-    /// unless flipped.
-    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let value = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-            return NSColor(
-                red: CGFloat((value >> 16) & 0xFF) / 255,
-                green: CGFloat((value >> 8) & 0xFF) / 255,
-                blue: CGFloat(value & 0xFF) / 255,
-                alpha: 1
-            )
-        })
     }
 }

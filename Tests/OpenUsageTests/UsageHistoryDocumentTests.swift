@@ -17,7 +17,7 @@ final class UsageHistoryDocumentTests: XCTestCase {
 
     func testRejectsUnsupportedSchemaInvalidValuesAndImpossibleDates() {
         var document = makeDocument(deviceID: "mac-a", updatedAt: .now)
-        document.schema = "openusage.history.v2"
+        document.schema = "openusage.history.v3"
         XCTAssertThrowsError(try document.validate()) { error in
             XCTAssertEqual(error as? UsageHistoryDocumentError, .unsupportedSchema)
         }
@@ -40,6 +40,61 @@ final class UsageHistoryDocumentTests: XCTestCase {
         document = makeDocument(deviceID: "mac-a", updatedAt: .now)
         let model = document.providers["claude"]!.modelUsage!.daily[0].models[0]
         document.providers["claude"]?.modelUsage?.daily[0].models.append(model)
+        XCTAssertThrowsError(try document.validate())
+    }
+
+    func testRejectsInvalidOrUnboundAccountIdentityMetadata() {
+        var document = makeDocument(deviceID: "mac-a", updatedAt: .now)
+        document.identities = ["claude": ""]
+        XCTAssertThrowsError(try document.validate()) { error in
+            XCTAssertEqual(error as? UsageHistoryDocumentError, .invalidIdentity("claude"))
+        }
+
+        document.identities = ["claude": "/Users/alice/.claude"]
+        XCTAssertThrowsError(try document.validate())
+
+        document.identities = ["codex": "account-id"]
+        XCTAssertThrowsError(try document.validate())
+
+        document.providers["cursor"] = document.providers["claude"]
+        document.identities = ["cursor": "account-id"]
+        XCTAssertThrowsError(try document.validate())
+    }
+
+    func testRejectsDuplicateAccountIdentityWithinOneProviderFamily() {
+        var document = makeDocument(deviceID: "mac-a", updatedAt: .now)
+        document.providers["claude@ab12cd34"] = document.providers["claude"]
+        document.identities = ["claude": "account-id", "claude@ab12cd34": "account-id"]
+
+        XCTAssertThrowsError(try document.validate()) { error in
+            guard let historyError = error as? UsageHistoryDocumentError,
+                  case .duplicateIdentity = historyError
+            else {
+                return XCTFail("expected duplicate account identity, got \(error)")
+            }
+        }
+    }
+
+    func testRejectsAccountCardWithoutIdentityAndMalformedCardIdentifiers() {
+        var document = makeDocument(deviceID: "mac-a", updatedAt: .now)
+        document.providers["claude@ab12cd34"] = document.providers["claude"]
+
+        XCTAssertThrowsError(try document.validate()) { error in
+            XCTAssertEqual(error as? UsageHistoryDocumentError, .invalidIdentity("claude@ab12cd34"))
+        }
+
+        document.providers["claude@ab12cd34"] = nil
+        document.providers["claude@@ab12cd34"] = document.providers["claude"]
+        XCTAssertThrowsError(try document.validate()) { error in
+            XCTAssertEqual(error as? UsageHistoryDocumentError, .invalidProvider("claude@@ab12cd34"))
+        }
+    }
+
+    func testLegacyDocumentsCannotCarryModernIdentityMetadata() {
+        var document = makeDocument(deviceID: "mac-a", updatedAt: .now)
+        document.schema = UsageHistoryDocument.legacySchemaV1
+        document.identities = ["claude": "account-id"]
+
         XCTAssertThrowsError(try document.validate())
     }
 

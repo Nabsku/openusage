@@ -2,13 +2,23 @@ import Foundation
 
 /// One Mac's presentation-free usage history in the private iCloud container.
 struct UsageHistoryDocument: Hashable, Sendable, Codable, Identifiable {
-    static let currentSchema = "openusage.history.v1"
+    /// v2 adds account cards (`claude@ab12cd34`) and the `identities` map that lets peers match
+    /// histories by ACCOUNT instead of by card id — the same account can be the default card on one
+    /// Mac and an extra card on another. v1 documents stay readable, but their account histories
+    /// are quarantined because they cannot establish account ownership. Non-account providers still
+    /// merge normally. v1 readers reject v2 documents with their designed update message.
+    static let currentSchema = "openusage.history.v2"
+    static let legacySchemaV1 = "openusage.history.v1"
 
     var schema: String = currentSchema
     var deviceID: String
     var deviceName: String
     var updatedAt: Date
     var providers: [String: ProviderUsageHistory]
+    /// Card id → stable account identity key (see `ProviderAccountID`), for every card whose
+    /// identity this Mac knows. Absent on v1 documents. Contains no emails or names — identity keys
+    /// are opaque account/organization identifiers.
+    var identities: [String: String]?
 
     var id: String { deviceID }
 
@@ -24,14 +34,46 @@ struct UsageHistoryDocument: Hashable, Sendable, Codable, Identifiable {
     }
 
     func validate() throws {
-        guard schema == Self.currentSchema else { throw UsageHistoryDocumentError.unsupportedSchema }
+        guard schema == Self.currentSchema || schema == Self.legacySchemaV1 else {
+            throw UsageHistoryDocumentError.unsupportedSchema
+        }
+        // v1 card ids are bare provider ids; v2 additionally carries account cards (`claude@ab12cd34`).
+        let idPattern = schema == Self.legacySchemaV1
+            ? #"^[a-z0-9][a-z0-9-]*$"#
+            : #"^[a-z0-9][a-z0-9-]*(?:@[a-f0-9]{8})?$"#
         guard !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { throw UsageHistoryDocumentError.invalidDevice }
 
+        if schema == Self.legacySchemaV1, identities != nil {
+            throw UsageHistoryDocumentError.invalidIdentity("legacy schema cannot contain account identities")
+        }
+
+        var identitiesByFamily: [String: Set<String>] = [:]
+        for (providerID, identity) in identities ?? [:] {
+            let family = ProviderAccountID.family(of: providerID)
+            guard providers[providerID] != nil,
+                  ProviderAccountID.families.contains(family),
+                  !identity.isEmpty,
+                  identity.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
+                  !identity.contains("/"),
+                  !identity.contains("\\")
+            else { throw UsageHistoryDocumentError.invalidIdentity(providerID) }
+
+            guard identitiesByFamily[family, default: []].insert(identity).inserted else {
+                throw UsageHistoryDocumentError.duplicateIdentity(providerID)
+            }
+        }
+
         for (providerID, history) in providers {
-            guard providerID.range(of: #"^[a-z0-9][a-z0-9-]*$"#, options: .regularExpression) != nil else {
+            guard providerID.range(of: idPattern, options: .regularExpression) != nil else {
                 throw UsageHistoryDocumentError.invalidProvider(providerID)
+            }
+            if ProviderAccountID.isAccountCard(providerID) {
+                let family = ProviderAccountID.family(of: providerID)
+                guard ProviderAccountID.families.contains(family), identities?[providerID] != nil else {
+                    throw UsageHistoryDocumentError.invalidIdentity(providerID)
+                }
             }
             var seriesDays: Set<String> = []
             for day in history.series.daily {
@@ -100,6 +142,8 @@ enum UsageHistoryDocumentError: Error, LocalizedError, Equatable {
     case unsupportedSchema
     case invalidDevice
     case invalidProvider(String)
+    case invalidIdentity(String)
+    case duplicateIdentity(String)
     case invalidDay(String)
     case duplicateDay(String)
     case duplicateModel(String)
@@ -110,6 +154,8 @@ enum UsageHistoryDocumentError: Error, LocalizedError, Equatable {
         case .unsupportedSchema: "This Mac wrote a newer usage-history format. Update OpenUsage."
         case .invalidDevice: "The synced Mac identity is invalid."
         case .invalidProvider: "The synced provider identifier is invalid."
+        case .invalidIdentity: "The synced account identity is invalid."
+        case .duplicateIdentity: "The synced account identity appears more than once."
         case .invalidDay: "The synced history contains an invalid date."
         case .duplicateDay: "The synced history contains the same date more than once."
         case .duplicateModel: "The synced history contains the same model more than once."

@@ -45,6 +45,41 @@ Today / Yesterday / Last 30 Days are computed **locally**: OpenUsage reads the C
 
 Local spend does not require a Claude OAuth login. If Claude Code uses an API-key gateway instead, the spend tiles and usage trend still load from its session logs; the Claude header shows **Not logged in** because the live Session and Weekly meters still require a Claude subscription login.
 
+## Multiple accounts
+
+OpenUsage discovers separate Claude Code logins in hidden folders directly under your home directory
+and folders directly under `~/.config`. Each account gets its own card, limits, plan, and local spend;
+another folder signed into the same account contributes to the existing card instead of creating a
+duplicate. The account using `$CLAUDE_CONFIG_DIR` is treated as the default login, even when that
+folder lives elsewhere. Cards stay attached to their original account when the default login changes.
+
+Cowork session folders are assigned to the account named by their own Claude state. A separate
+Claude Desktop account needs at least one Cowork session identifying its organization and a matching
+cached Desktop login; signing into Desktop alone does not create a card. Desktop credentials are
+pinned to their verified or uniquely remembered organization, so switching Desktop's active
+organization cannot make a card borrow another account's usage. If users share an organization, or
+another known user's organization is missing, its Desktop login is not used until the owner can be
+verified. Previously seen accounts remain safety checks even while their cards are hidden. Sessions
+without a provable owner are left unassigned when multiple accounts are present. An incomplete session
+scan temporarily withholds Desktop spend history while a verified single-account login can still show
+its live limits. Old Cowork sessions can keep a signed-out organization visible with a login warning.
+
+Changes to the default Claude Code login are detected within about five seconds; custom folders,
+Desktop logins, and new Cowork sessions are checked about once a minute. Existing sessions update on
+normal refreshes. The first Desktop refresh may ask for Keychain permission; choose **Always Allow**.
+Subscription upgrades or downgrades appear after Claude Code or Desktop updates its saved login
+details and OpenUsage refreshes; OpenUsage does not make a separate billing request.
+
+Cards keep their account identity, layout, and menu-bar pins when a login moves between sources or
+temporarily disappears. When several accounts share the same email address, their cards use the
+organization name instead; Claude's generic email-based organization becomes **Personal**. For
+example, **Claude — SUNSTORY** and **Claude — Personal** stay easy to tell apart. Right-click a card
+and choose **Rename…**, or change its name in Customize. Extra cards have identifiers such as
+`claude@ab12cd34`; the original account keeps the existing
+`claude` identifier even when it no longer occupies the default login. In the local API and CLI,
+requesting `claude` returns every Claude account. There are no manual Add Account or Remove Account
+controls; sign in or out through Claude Code or Claude Desktop instead.
+
 ## Troubleshooting
 
 - **"Not logged in"** — run `claude` and sign in to enable live subscription limits, then refresh. If you use an API-key gateway, local spend still appears whenever Claude Code has written session logs.

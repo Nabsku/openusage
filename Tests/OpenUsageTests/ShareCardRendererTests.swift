@@ -48,6 +48,33 @@ final class ShareCardRendererTests: XCTestCase {
         XCTAssertGreaterThan(rep.pixelsHigh, 0)
     }
 
+    func testMultiAccountShareCardsRenderDistinctAccountLabels() throws {
+        let provider = MockData.claude
+        let personalProvider = Provider(
+            id: "claude@ab12cd34",
+            displayName: "Claude — Personal",
+            icon: provider.icon
+        )
+        let cases = [
+            (provider, "Claude — SUNSTORY", "Team 5x"),
+            (personalProvider, "Claude — Personal", "Max 20x")
+        ]
+
+        for (account, name, plan) in cases {
+            let row = WidgetData(title: "Session", icon: account.icon, kind: .percent, used: 22, limit: 100)
+            let card = ShareCardView(
+                provider: account,
+                plan: plan,
+                rows: [row],
+                appearance: .dark,
+                displayNameOverride: name
+            )
+            XCTAssertEqual(card.displayNameOverride, name)
+            XCTAssertEqual(card.plan, plan)
+            XCTAssertNotNil(ShareCardRenderer.image(for: card))
+        }
+    }
+
     func testCondensedTextRowIndicesFollowsNeighborRule() {
         let rows = MockData.descriptors(for: MockData.claude.id).map { $0.sample }
         XCTAssertGreaterThan(rows.count, 1, "sample fixture should have multiple rows")

@@ -134,6 +134,82 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         XCTAssertEqual(usageRequests(fixture.http).count, 2)
     }
 
+    func testAccountBoundRuntimeNeverPublishesADifferentLoginAfterMidRequestSwap() async {
+        let accountA = credentials(access: "account-a", refresh: "refresh-a", plan: "pro")
+        let accountB = credentials(access: "account-b", refresh: "refresh-b", plan: "max")
+        let identityPath = "/tmp/claude/.claude.json"
+        let files = FakeFiles([
+            path: accountA,
+            identityPath: Self.identity(uuid: "account-a", organization: "personal"),
+        ])
+        let fixture = makeFixture(
+            files: files,
+            expectedIdentityKey: "account-a|personal"
+        ) { [path] request in
+            if request.headers["Authorization"] == "Bearer account-a" {
+                files.files[path] = accountB
+                files.files[identityPath] = Self.identity(uuid: "account-b", organization: "work")
+                return Self.usageResponse(percent: 25)
+            }
+            return Self.usageResponse(percent: 75)
+        }
+
+        let snapshot = await fixture.provider.refresh()
+
+        XCTAssertNil(sessionUsage(snapshot), "another account's limits must never be published on the bound card")
+        XCTAssertNotNil(snapshot.errorCategory)
+        XCTAssertFalse(usageRequests(fixture.http).contains {
+            $0.headers["Authorization"] == "Bearer account-b"
+        })
+    }
+
+    func testAccountBoundRuntimeRejectsAnotherOrganizationForTheSameClaudeUser() async {
+        let files = FakeFiles([
+            path: credentials(access: "team-token", refresh: "team-refresh", plan: "team"),
+            "/tmp/claude/.claude.json": Self.identity(uuid: "shared-user", organization: "team"),
+        ])
+        let fixture = makeFixture(
+            files: files,
+            expectedIdentityKey: "shared-user|personal"
+        ) { _ in
+            XCTFail("a credential owned by another organization must never reach the usage endpoint")
+            return Self.usageResponse(percent: 80)
+        }
+
+        let snapshot = await fixture.provider.refresh()
+
+        XCTAssertNil(sessionUsage(snapshot))
+        XCTAssertNotNil(snapshot.errorCategory)
+        XCTAssertTrue(fixture.http.requests.isEmpty)
+    }
+
+    func testAccountBoundRuntimeStillAcceptsTokenRotationForTheSameAccount() async {
+        let files = FakeFiles([
+            path: credentials(
+                access: "old-access", refresh: "old-refresh", plan: "pro", expiresAt: 1
+            ),
+            "/tmp/claude/.claude.json": Self.identity(uuid: "account-a", organization: "personal"),
+        ])
+        let fixture = makeFixture(
+            files: files,
+            expectedIdentityKey: "account-a|personal"
+        ) { request in
+            if request.url.absoluteString.hasSuffix("/v1/oauth/token") {
+                return HTTPResponse(
+                    statusCode: 200,
+                    headers: [:],
+                    body: Data(#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#.utf8)
+                )
+            }
+            return Self.usageResponse(percent: 25)
+        }
+
+        let snapshot = await fixture.provider.refresh()
+
+        XCTAssertEqual(sessionUsage(snapshot), 25)
+        XCTAssertTrue(files.files[path]?.contains("new-refresh") == true)
+    }
+
     func testHigherPriorityLoginAddedDuringUsageRequestWins() async {
         let accountA = credentials(access: "account-a", refresh: "refresh-a", plan: "pro")
         let accountB = credentials(access: "account-b", refresh: "refresh-b", plan: "max")
@@ -232,6 +308,34 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         )
     }
 
+
+    func testSubscriptionDowngradeUpdatesPlanWithoutChangingAccountOrBillingLookup() async {
+        let identityPath = "/tmp/claude/.claude.json"
+        let files = FakeFiles([
+            identityPath:
+                #"{"oauthAccount":{"accountUuid":"ACCOUNT-A","organizationUuid":"PERSONAL"}}"#,
+            path:
+                #"{"claudeAiOauth":{"accessToken":"same-account-token","subscriptionType":"max","rateLimitTier":"default_claude_max_20x","scopes":["user:profile"]}}"#,
+        ])
+        let fixture = makeFixture(files: files, expectedIdentityKey: "account-a|personal") {
+            _ in Self.usageResponse(percent: 25)
+        }
+
+        let maxSnapshot = await fixture.provider.refresh()
+        XCTAssertEqual(maxSnapshot.plan, "Max 20x")
+
+        files.files[path] =
+            #"{"claudeAiOauth":{"accessToken":"same-account-token","subscriptionType":"pro","rateLimitTier":"default_claude_pro","scopes":["user:profile"]}}"#
+        let downgradedSnapshot = await fixture.provider.refresh()
+
+        XCTAssertEqual(downgradedSnapshot.plan, "Pro")
+        XCTAssertEqual(downgradedSnapshot.providerID, maxSnapshot.providerID)
+        XCTAssertEqual(fixture.http.requests.count, 2)
+        XCTAssertTrue(fixture.http.requests.allSatisfy {
+            $0.url.absoluteString == "https://api.anthropic.com/api/oauth/usage"
+        })
+    }
+
     private struct Fixture {
         var provider: ClaudeProvider
         var files: FakeFiles
@@ -248,6 +352,7 @@ final class ClaudeAccountIsolationTests: XCTestCase {
     private func makeFixture(
         files: FakeFiles,
         keychain: any KeychainAccessing = FakeKeychain(),
+        expectedIdentityKey: String? = nil,
         handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse
     ) -> Fixture {
         let http = RoutingHTTPClient(handler: handler)
@@ -263,7 +368,8 @@ final class ClaudeAccountIsolationTests: XCTestCase {
                 usageClient: ClaudeUsageClient(httpClient: http),
                 logUsageScanner: ClaudeLogFixture.scanner(home: nil),
                 now: { now },
-                pricing: { TestPricing.bundled }
+                pricing: { TestPricing.bundled },
+                expectedIdentityKey: expectedIdentityKey
             ),
             files: files,
             http: http
@@ -277,6 +383,10 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         expiresAt: Double = 4_102_444_800_000
     ) -> String {
         #"{"claudeAiOauth":{"accessToken":"\#(access)","refreshToken":"\#(refresh)","expiresAt":\#(expiresAt),"subscriptionType":"\#(plan)","scopes":["user:profile"]}}"#
+    }
+
+    private nonisolated static func identity(uuid: String, organization: String) -> String {
+        #"{"oauthAccount":{"accountUuid":"\#(uuid)","organizationUuid":"\#(organization)"}}"#
     }
 
     private nonisolated static func usageResponse(percent: Double) -> HTTPResponse {

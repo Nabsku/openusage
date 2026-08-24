@@ -27,14 +27,6 @@ Settings → Privacy → **Hide From Screen Share** (off by default). While your
 
 Detection rides the system's own "an app is capturing the screen" signal — the same one that lights the capture indicator in the menu bar — checked the instant it changes and re-checked every few seconds while the setting is on.
 
-Normally:
-
-![The menu bar strip showing usage values](assets/menu-bar-privacy-idle.png)
-
-While the screen is shared or recorded:
-
-![The menu bar strip concealed behind the OpenUsage wordmark](assets/menu-bar-privacy-sharing.png)
-
 ## What the strip shows
 
 The strip only renders real data. A starred metric with nothing fetched yet is skipped; a provider whose stars all lack data disappears entirely (icon included). When nothing has data, the strip falls back to the app icon. Stars follow your Customize order — Always Visible metrics first, then On Demand ones. A metric can be starred whether it's Always Visible or On Demand.

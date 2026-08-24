@@ -386,6 +386,96 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(httpClient.requests.count, 1)
     }
 
+
+    func testDesktopOnlyScopeLoadsExactlyItsPinnedOrg() throws {
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [
+                cacheKey(organization: organization): tokenEntry("active-org-token", expiresIn: 3_600),
+                cacheKey(organization: otherOrganization): tokenEntry("cowork-org-token", expiresIn: 3_600)
+            ]
+        )
+        let now = now
+        let authStore = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: fixture.files,
+            keychain: FakeKeychain(),
+            desktop: fixture.store,
+            scope: .desktopOnly(organization: otherOrganization),
+            now: { now }
+        )
+
+        let load = authStore.loadCredentialSet()
+
+        XCTAssertEqual(load.candidates.map(\.oauth.accessToken), ["cowork-org-token"])
+        XCTAssertEqual(load.candidates.first?.source, .desktop)
+        XCTAssertEqual(load.desktopStatus, .available)
+    }
+
+    func testStandardStorePinsDesktopFallbackInsteadOfFollowingAnotherCardsActiveOrg() throws {
+        // Desktop's ACTIVE org is another card's account (a Cowork login). The default card's
+        // fallback must read its own org's token, never follow the active org.
+        let fixture = try makeFixture(
+            activeOrganization: otherOrganization,
+            v2: [
+                cacheKey(organization: organization): tokenEntry("default-org-token", expiresIn: 3_600),
+                cacheKey(organization: otherOrganization): tokenEntry("cowork-card-token", expiresIn: 3_600)
+            ]
+        )
+        let now = now
+        let authStore = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: fixture.files,
+            keychain: FakeKeychain(),
+            desktop: fixture.store,
+            standardDesktopOrganization: organization,
+            allowsUnpinnedStandardDesktopFallback: false,
+            now: { now }
+        )
+
+        let load = authStore.loadCredentialSet()
+
+        XCTAssertEqual(load.candidates.first?.oauth.accessToken, "default-org-token")
+        XCTAssertFalse(load.candidates.contains { $0.oauth.accessToken == "cowork-card-token" })
+        XCTAssertEqual(load.desktopStatus, .available)
+    }
+
+    @MainActor
+    func testDesktopOnlyFootprintTracksLogoutAndRestoredLoginWithoutSafeStorageAccess() async throws {
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [
+                cacheKey(organization: organization):
+                    tokenEntry("desktop-token", expiresIn: 3_600),
+            ],
+            requiresInteraction: true
+        )
+        let now = now
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: fixture.files,
+            keychain: FakeKeychain(),
+            desktop: fixture.store,
+            scope: .desktopOnly(organization: organization),
+            now: { now }
+        )
+        let provider = ClaudeProvider(authStore: store)
+        let configPath = home
+            .appendingPathComponent("Library/Application Support/Claude/config.json").path
+        let encryptedConfig = try XCTUnwrap(fixture.files.files[configPath])
+
+        let signedIn = await provider.hasLocalCredentials()
+        XCTAssertTrue(signedIn)
+        fixture.files.files.removeValue(forKey: configPath)
+        let signedOut = await provider.hasLocalCredentials()
+        XCTAssertFalse(signedOut)
+
+        fixture.files.files[configPath] = encryptedConfig
+        let restored = await provider.hasLocalCredentials()
+        XCTAssertTrue(restored)
+        XCTAssertTrue(fixture.keyReader.calls.isEmpty)
+    }
+
     private func makeFixture(
         activeOrganization: String,
         v2: [String: Any],
