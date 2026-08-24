@@ -84,6 +84,7 @@ final class ClaudeProvider: ProviderRuntime {
 
     func refresh() async -> ProviderSnapshot {
         guard await loadOffMainActor({ [authStore] in authStore.belongsToExpectedAccount() }) else {
+            activateLiveUsageCache(for: nil)
             return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.credentialsChanged)
         }
         let snapshot = await refresh(
@@ -92,6 +93,7 @@ final class ClaudeProvider: ProviderRuntime {
             previousFallbackError: nil
         )
         guard await loadOffMainActor({ [authStore] in authStore.belongsToExpectedAccount() }) else {
+            activateLiveUsageCache(for: nil)
             return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.credentialsChanged)
         }
         return snapshot
@@ -418,8 +420,8 @@ final class ClaudeProvider: ProviderRuntime {
 
     /// Cache state belongs to the complete access + refresh credential pair. A login change therefore
     /// clears both last-good usage and cooldown, even when the two accounts share an access token.
-    private func activateLiveUsageCache(for credentials: ClaudeOAuth) {
-        let fingerprint = Self.credentialFingerprint(credentials)
+    private func activateLiveUsageCache(for credentials: ClaudeOAuth?) {
+        let fingerprint = credentials.map(Self.credentialFingerprint)
         guard cachedCredentialFingerprint != fingerprint else { return }
         cachedCredentialFingerprint = fingerprint
         lastGoodUsage = nil

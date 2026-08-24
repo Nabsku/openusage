@@ -348,6 +348,23 @@ final class ProviderAccountAssemblyTests: XCTestCase {
                        .configDir(path: path, keychainLiteral: path))
         XCTAssertEqual(runtimes.last?.provider.id, assembly.defaultClaudeCardID)
         XCTAssertEqual(runtimes.last?.authStore.scope, .standard)
+
+        let signedOut = DefaultAccountObserver(
+            environment: FakeEnvironment(), files: FakeFiles(), keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let afterLogout = ProviderAccountAssembly.make(
+            observer: signedOut, accountsStore: store, claudeDiscovery: discovery
+        )
+        let remaining = ProviderCatalog.make(
+            claudeCards: afterLogout.claudeCards,
+            defaultClaudeCardID: afterLogout.defaultClaudeCardID,
+            claudeIdentityKeys: afterLogout.identityKeysByCard
+        ).compactMap { $0 as? ClaudeProvider }
+
+        XCTAssertEqual(remaining.map { $0.provider.id }, ["claude"])
+        XCTAssertEqual(remaining.first?.authStore.scope, .configDir(path: path, keychainLiteral: path))
+        XCTAssertNil(afterLogout.identityKeysByCard[assembly.defaultClaudeCardID])
     }
 
     func testNothingObservedLeavesRegistryAndKeysEmpty() {

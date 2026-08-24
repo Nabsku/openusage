@@ -26,20 +26,22 @@ enum ProviderCatalog {
         // account registry and are resolved at render time (`ProviderAccountRecord.resolvedDisplayName`),
         // so a baked name can never be a stale copy of one.
         var runtimes: [ProviderRuntime] = []
-        runtimes.append(ClaudeProvider(
-            provider: ClaudeProvider.makeProvider(
-                id: defaultClaudeCardID,
-                displayName: defaultClaudeDisplayName ?? "Claude"
-            ),
-            // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
-            // belongs to one of them — fetching that account's usage onto the default card. Desktop
-            // returns as its own properly-pinned source kind in Phase 3.
-            authStore: ClaudeAuthStore(
-                allowsDesktopFallback: claudeCards.isEmpty && isClaudeDiscoveryComplete,
-                expectedIdentityKey: claudeIdentityKeys[defaultClaudeCardID]
-            ),
-            logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots)
-        ))
+        if !claudeCards.contains(where: { $0.id == defaultClaudeCardID }) {
+            runtimes.append(ClaudeProvider(
+                provider: ClaudeProvider.makeProvider(
+                    id: defaultClaudeCardID,
+                    displayName: defaultClaudeDisplayName ?? "Claude"
+                ),
+                // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
+                // belongs to one of them — fetching that account's usage onto the default card. Desktop
+                // returns as its own properly-pinned source kind in Phase 3.
+                authStore: ClaudeAuthStore(
+                    allowsDesktopFallback: claudeCards.isEmpty && isClaudeDiscoveryComplete,
+                    expectedIdentityKey: claudeIdentityKeys[defaultClaudeCardID]
+                ),
+                logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots)
+            ))
+        }
         for card in claudeCards {
             runtimes.append(claudeAccountRuntime(card: card))
         }

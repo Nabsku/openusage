@@ -199,7 +199,10 @@ struct ProviderAccountAssembly {
         }
 
         let records = accountsStore.reconcile(with: observations)
-        let defaultClaudeRecord = accountsStore.defaultBadgeHolder(family: "claude")
+        let observedDefaultIdentity = identityKeys["claude"]
+        let defaultClaudeRecord = accountsStore.defaultBadgeHolder(family: "claude").flatMap { record in
+            record.identityKey == observedDefaultIdentity ? record : nil
+        }
         if let defaultClaudeRecord, defaultClaudeRecord.id != "claude" {
             identityKeys.removeValue(forKey: "claude")
             identityKeys[defaultClaudeRecord.id] = defaultClaudeRecord.identityKey

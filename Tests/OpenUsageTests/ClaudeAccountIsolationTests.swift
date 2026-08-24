@@ -140,9 +140,14 @@ final class ClaudeAccountIsolationTests: XCTestCase {
             path: credentials(access: "account-a", refresh: "refresh-a", plan: "pro"),
             identityPath: #"{"oauthAccount":{"accountUuid":"account-a"}}"#,
         ])
+        let calls = IsolationCallCounter()
         let fixture = makeFixture(files: files, expectedIdentityKey: "account-a") { request in
             if request.headers["Authorization"] == "Bearer account-a" {
-                files.files[identityPath] = #"{"oauthAccount":{"accountUuid":"account-b"}}"#
+                if calls.next() == 1 {
+                    files.files[identityPath] = #"{"oauthAccount":{"accountUuid":"account-b"}}"#
+                    return Self.usageResponse(percent: 75)
+                }
+                return HTTPResponse(statusCode: 429, headers: ["retry-after": "600"], body: Data())
             }
             return Self.usageResponse(percent: 75)
         }
@@ -154,6 +159,11 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         let swappedBeforeRefresh = await fixture.provider.refresh()
         XCTAssertNil(sessionUsage(swappedBeforeRefresh))
         XCTAssertEqual(usageRequests(fixture.http).count, 1)
+
+        files.files[identityPath] = #"{"oauthAccount":{"accountUuid":"account-a"}}"#
+        let restoredDuringRateLimit = await fixture.provider.refresh()
+        XCTAssertNil(sessionUsage(restoredDuringRateLimit), "rejected account usage must never survive in the rate-limit cache")
+        XCTAssertEqual(status(restoredDuringRateLimit)?.hasPrefix("Rate limited"), true)
     }
 
     func testHigherPriorityLoginAddedDuringUsageRequestWins() async {
