@@ -30,6 +30,7 @@ final class CodexResetClaimService {
     private let usageClient: CodexUsageClient
     private let credentialCandidates: () async -> [Credentials]
     private let expectedIdentityKey: String?
+    private let verifiedIdentityKey: (@MainActor () -> String?)?
     private let refreshAfterClaim: () async -> Void
     private var isRetiredForAccountGraphReload = false
     /// The credit id each idempotency key was matched to, kept for the key's retries: if a consume
@@ -44,11 +45,13 @@ final class CodexResetClaimService {
         usageClient: CodexUsageClient,
         credentialCandidates: @escaping () async -> [Credentials],
         expectedIdentityKey: String? = nil,
+        verifiedIdentityKey: (@MainActor () -> String?)? = nil,
         refreshAfterClaim: @escaping () async -> Void = {}
     ) {
         self.usageClient = usageClient
         self.credentialCandidates = credentialCandidates
         self.expectedIdentityKey = expectedIdentityKey
+        self.verifiedIdentityKey = verifiedIdentityKey
         self.refreshAfterClaim = refreshAfterClaim
     }
 
@@ -62,6 +65,7 @@ final class CodexResetClaimService {
         authStore: CodexAuthStore,
         usageClient: CodexUsageClient,
         expectedIdentityKey: String?,
+        verifiedIdentityKey: @escaping @MainActor () -> String?,
         refreshAfterClaim: @escaping () async -> Void
     ) {
         self.init(
@@ -79,6 +83,7 @@ final class CodexResetClaimService {
                 }
             },
             expectedIdentityKey: expectedIdentityKey,
+            verifiedIdentityKey: verifiedIdentityKey,
             refreshAfterClaim: refreshAfterClaim
         )
     }
@@ -87,6 +92,11 @@ final class CodexResetClaimService {
     /// collapsed to an outcome the popover can render.
     func claim(creditExpiringAt expiry: Date, redeemRequestID: String) async -> ResetClaimOutcome {
         guard !isRetiredForAccountGraphReload else { return .failed }
+        let expectedIdentityKey = expectedIdentityKey ?? verifiedIdentityKey?()
+        guard expectedIdentityKey != nil || verifiedIdentityKey == nil else {
+            AppLog.error(LogTag.plugin("codex"), "reset claim: the displayed account has not been verified")
+            return .failed
+        }
         let candidates = await credentialCandidates().filter { candidate in
             guard let expectedIdentityKey else { return true }
             return candidate.accountID?.caseInsensitiveCompare(expectedIdentityKey) == .orderedSame
@@ -167,7 +177,12 @@ final class CodexResetClaimService {
                 Self.belongsToSameAccount($0, as: credentials)
                     && $0.accessToken == credentials.accessToken
             } ?? currentCandidates.first { Self.belongsToSameAccount($0, as: credentials) }
-            guard !isRetiredForAccountGraphReload, let currentCredentials else {
+            let expectedOwner = expectedIdentityKey ?? verifiedIdentityKey?()
+            guard !isRetiredForAccountGraphReload, let currentCredentials,
+                  (expectedOwner.map {
+                      currentCredentials.accountID?.caseInsensitiveCompare($0) == .orderedSame
+                  } ?? (verifiedIdentityKey == nil))
+            else {
                 AppLog.error(LogTag.plugin("codex"), "reset claim: the original account is no longer signed in")
                 return .failed
             }

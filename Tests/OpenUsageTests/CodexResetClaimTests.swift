@@ -328,6 +328,25 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertTrue(http.requests.isEmpty)
     }
 
+    func testKeychainClaimRejectsForeignOrUnverifiedDisplayedAccount() async {
+        for displayedAccount in ["acct-A", nil] as [String?] {
+            let http = RoutingHTTPClient { _ in
+                XCTFail("an unverified or foreign keychain account must never receive a claim request")
+                return HTTPResponse(statusCode: 200, headers: [:], body: Self.listBody())
+            }
+            let service = CodexResetClaimService(
+                usageClient: CodexUsageClient(http: http),
+                credentialCandidates: { [("new-account-token", "acct-B")] },
+                verifiedIdentityKey: { displayedAccount }
+            )
+
+            let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
+
+            XCTAssertEqual(outcome, .failed)
+            XCTAssertTrue(http.requests.isEmpty)
+        }
+    }
+
     func testRetiredAccountNeverConsumesAfterSuspendedCreditLookup() async {
         let gate = ResetClaimRequestGate()
         let http = RoutingHTTPClient { request in
@@ -370,7 +389,7 @@ final class CodexResetClaimTests: XCTestCase {
                     ? [("old-account-token", "acct-A")]
                     : [("new-account-token", "acct-B")]
             },
-            expectedIdentityKey: "acct-A"
+            verifiedIdentityKey: { activeAccount.count == 0 ? "acct-A" : "acct-B" }
         )
         let claim = Task { await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1") }
         while await !gate.isWaiting { await Task.yield() }

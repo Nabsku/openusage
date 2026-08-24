@@ -220,6 +220,7 @@ final class AppContainer {
                 authStore: codex.authStore,
                 usageClient: codex.usageClient,
                 expectedIdentityKey: codex.expectedIdentityKey,
+                verifiedIdentityKey: { [weak codex] in codex?.verifiedAccountIdentityKey },
                 refreshAfterClaim: { [weak dataStore] in
                     var failures = 0
                     for attempt in 0..<45 {
