@@ -843,6 +843,25 @@ final class LayoutStoreTests: XCTestCase {
             store.defaultExpandedOnEnableIDs.contains("claude@work.sonnet"),
             "the caret split translates with the metric set"
         )
+
+        let freshDefaults = makeDefaults("AccountCardFreshDiscovery")
+        let provisionalRegistry = WidgetRegistry(
+            providers: [claude],
+            descriptors: registry.descriptors.filter { $0.providerID == "claude" }
+        )
+        _ = LayoutStore(
+            registry: provisionalRegistry, defaults: freshDefaults, storageKey: "layout",
+            defaultMetricIDs: ["claude.session"],
+            defaultExpandedMetricIDs: ["claude.session", "claude.sonnet"],
+            persistInitialState: false
+        )
+        let discovered = LayoutStore(
+            registry: registry, defaults: freshDefaults, storageKey: "layout",
+            defaultMetricIDs: ["claude.session"],
+            defaultExpandedMetricIDs: ["claude.session", "claude.sonnet"]
+        )
+        XCTAssertTrue(discovered.expandedMetricIDs.contains("claude@work.session"))
+        XCTAssertTrue(discovered.expandedMetricIDs.contains("claude@work.sonnet"))
     }
 
     func testResetToDefaultRestoresProviderOrderAndMarksDefaultsSeeded() {

@@ -220,6 +220,32 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         XCTAssertTrue(replacement.enabled)
     }
 
+    func testEnabledReplacementWaitsForRetiredGraphsInFlightDisableDeletion() async throws {
+        let defaults = makeDefaults("reenable-before-account-graph-reload")
+        let fileStore = RecordingHistoryFileStore()
+        let deviceIDStore = MemoryDeviceIDStore()
+        let retired = makeSync(defaults, fileStore: fileStore, deviceIDStore: deviceIDStore)
+        retired.enabled = true
+        try await waitUntil { await fileStore.writeCount == 1 && !retired.isSyncing }
+
+        await fileStore.holdNextDelete()
+        retired.enabled = false
+        try await waitUntil { await fileStore.deleteIsHeld }
+        retired.enabled = true
+        retired.shutdownForAccountGraphReload()
+        let replacement = makeSync(defaults, fileStore: fileStore, deviceIDStore: deviceIDStore)
+
+        for _ in 0..<10 { await Task.yield() }
+        let writesBeforeDeleteCompletes = await fileStore.writeCount
+        XCTAssertEqual(writesBeforeDeleteCompletes, 1, "replacement waits for the retired graph's deletion")
+        await fileStore.releaseDelete()
+        try await waitUntil { await fileStore.writeCount == 2 && !replacement.isSyncing }
+        let documents = await fileStore.documents
+        let deletedDeviceIDs = await fileStore.deletedDeviceIDs
+        XCTAssertEqual(documents.map(\.deviceID), [replacement.deviceID])
+        XCTAssertEqual(deletedDeviceIDs, [replacement.deviceID])
+    }
+
     func testDisableDeletesWriteThatWasAlreadyInFlight() async throws {
         let defaults = makeDefaults("disable-in-flight-write")
         let fileStore = RecordingHistoryFileStore()

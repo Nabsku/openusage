@@ -118,6 +118,7 @@ final class LayoutStore {
         migrationBaselineMetricIDs: [String] = DefaultLayout.migrationBaselineMetricIDs,
         defaultPinnedMetricIDs: [String] = DefaultLayout.pinnedMetricIDs,
         defaultExpandedMetricIDs: [String] = DefaultLayout.expandedMetricIDs,
+        persistInitialState: Bool = true,
         isProviderEnabled: @escaping @MainActor (String) -> Bool = { _ in true }
     ) {
         self.registry = registry
@@ -152,10 +153,12 @@ final class LayoutStore {
         defaultExpandedOnEnableIDs = initial.defaultExpandedOnEnableIDs
         menuBarStyle = initial.menuBarStyle
 
-        if initial.shouldPersistExpandOnEnable { persistExpandOnEnable() }
-        if initial.shouldPersistExpanded { persistExpanded() }
-        if let seededDefaults = initial.seededDefaultsToPersist { persistSeededDefaults(seededDefaults) }
-        syncPlacedOrder(persistChanges: initial.shouldPersistPlaced)
+        if persistInitialState {
+            if initial.shouldPersistExpandOnEnable { persistExpandOnEnable() }
+            if initial.shouldPersistExpanded { persistExpanded() }
+            if let seededDefaults = initial.seededDefaultsToPersist { persistSeededDefaults(seededDefaults) }
+        }
+        syncPlacedOrder(persistChanges: persistInitialState && initial.shouldPersistPlaced)
     }
 
     func isProviderExpanded(_ providerID: String) -> Bool {

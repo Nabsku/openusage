@@ -260,7 +260,7 @@ final class ICloudUsageSyncStore {
         dataStore.onLocalHistoryChanged = nil
         stopObserving()
 
-        guard !enabled, disableCleanupPending else { return }
+        guard disableCleanupPending else { return }
         // Opt-out may have queued its deletion without getting a chance to run before the graph was
         // retired. Finish independently of that worker, and serialize every later graph's activation
         // behind this device's cleanup so a delayed delete cannot remove its replacement's new file.

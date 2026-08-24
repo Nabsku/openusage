@@ -353,6 +353,36 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertFalse(http.requests.contains { $0.url == CodexUsageClient.consumeResetCreditURL })
     }
 
+    func testAccountSwitchDuringCreditLookupNeverConsumesBeforeRuntimeRetires() async {
+        let gate = ResetClaimRequestGate()
+        let activeAccount = RefreshCounter()
+        let http = RoutingHTTPClient { request in
+            if request.url == CodexUsageClient.resetCreditsURL {
+                await gate.wait()
+                return HTTPResponse(statusCode: 200, headers: [:], body: Self.listBody())
+            }
+            return HTTPResponse(statusCode: 200, headers: [:], body: Self.consumeBody(code: "reset"))
+        }
+        let service = CodexResetClaimService(
+            usageClient: CodexUsageClient(http: http),
+            credentialCandidates: {
+                activeAccount.count == 0
+                    ? [("old-account-token", "acct-A")]
+                    : [("new-account-token", "acct-B")]
+            },
+            expectedIdentityKey: "acct-A"
+        )
+        let claim = Task { await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1") }
+        while await !gate.isWaiting { await Task.yield() }
+
+        activeAccount.count = 1
+        await gate.release()
+
+        let result = await claim.value
+        XCTAssertEqual(result, .failed)
+        XCTAssertEqual(http.requests.map(\.url), [CodexUsageClient.resetCreditsURL])
+    }
+
     func testClaimFailsWhenEveryCandidateIsRejected() async {
         let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
         let service = CodexResetClaimService(

@@ -155,6 +155,15 @@ final class AppContainer {
         accountGraph.accountWatcher = AccountRuntimeTaskLifetime([
             Self.startAccountGraphWatch(accounts: accounts, initialAssembly: accountAssembly) { [weak self] assembly in
                 self?.replaceAccountRuntime(with: assembly)
+            } onOwnershipUnverified: { [weak self] in
+                guard let self else { return }
+                let quarantined = ProviderAccountAssembly(
+                    identityKeysByCard: [:],
+                    allowsUnboundClaudeFallback: !self.accounts.records.contains { $0.family == "claude" },
+                    isClaudeDiscoveryComplete: false,
+                    defaultClaudeDesktopAccess: .denied
+                )
+                self.replaceAccountRuntime(with: quarantined, quarantinesUnverifiedAccountData: true)
             } onLogRootsChanged: { [weak self] assembly in
                 await self?.updateAccountLogRouting(with: assembly)
             },
@@ -180,7 +189,9 @@ final class AppContainer {
         let providers = ProviderCatalog.make(accountAssembly: assembly)
         let registry = WidgetRegistry.from(providers)
         let layout = LayoutStore(
-            registry: registry, isProviderEnabled: { [enablement] in enablement.isEnabled($0) }
+            registry: registry,
+            persistInitialState: !quarantinesUnverifiedAccountData,
+            isProviderEnabled: { [enablement] in enablement.isEnabled($0) }
         )
         let dataStore = WidgetDataStore(
             registry: registry,
@@ -269,15 +280,21 @@ final class AppContainer {
         return task
     }
 
-    private func replaceAccountRuntime(with assembly: ProviderAccountAssembly) {
+    private func replaceAccountRuntime(
+        with assembly: ProviderAccountAssembly, quarantinesUnverifiedAccountData: Bool = false
+    ) {
         let previousScreen = layout.screen
         let snapshotCache = accountGraph.state.snapshotCache
         accountGraph.retireCurrentState()
         let replacement = Self.makeAccountRuntime(
             assembly: assembly, accounts: accounts,
             enablement: enablement, notificationSettings: notificationSettings,
-            snapshotCache: snapshotCache
+            snapshotCache: snapshotCache,
+            quarantinesUnverifiedAccountData: quarantinesUnverifiedAccountData
         )
+        if quarantinesUnverifiedAccountData {
+            replacement.iCloudSync.shutdownForAccountGraphReload()
+        }
         replacement.layout.screen = previousScreen
         replacement.dataStore.onRefreshOutcome = { [weak telemetry] providerID, outcome, category, manual in
             telemetry?.record(providerID: providerID, outcome: outcome, category: category, manual: manual)
@@ -285,7 +302,8 @@ final class AppContainer {
         accountGraph.state = replacement
         accountGraph.runtimeTasks = AccountRuntimeTaskLifetime([
             Self.startPeriodicRefresh(dataStore: replacement.dataStore, telemetry: telemetry),
-            NewProviderSeeder.reconcileIfNeeded(providers: replacement.providers, enablement: enablement),
+            quarantinesUnverifiedAccountData ? nil
+                : NewProviderSeeder.reconcileIfNeeded(providers: replacement.providers, enablement: enablement),
         ])
         AppLog.info(.config, "accounts: account runtimes updated without replacing app services")
     }
@@ -389,6 +407,7 @@ final class AppContainer {
         accounts: ProviderAccountsStore,
         initialAssembly: ProviderAccountAssembly,
         onChange: @escaping @MainActor (ProviderAccountAssembly) -> Void,
+        onOwnershipUnverified: @escaping @MainActor () -> Void,
         onLogRootsChanged: @escaping @MainActor (ProviderAccountAssembly) async -> Void
     ) -> Task<Void, Never> {
         func observeDefaults() async -> [String: DefaultAccountObserver.Outcome] {
@@ -418,6 +437,7 @@ final class AppContainer {
             var previousRouting = AccountLogRoutingFingerprint(initialAssembly)
             var checksSinceFullDiscovery = 0
             var bootstrapped = false
+            var ownershipIsQuarantined = false
             while !Task.isCancelled {
                 if bootstrapped {
                     do {
@@ -432,7 +452,10 @@ final class AppContainer {
                 guard !bootstrapped || observedDefaults != previousDefaults || checksSinceFullDiscovery >= 12 else {
                     continue
                 }
-                previousDefaults = observedDefaults
+                if bootstrapped && observedDefaults != previousDefaults && !ownershipIsQuarantined {
+                    onOwnershipUnverified()
+                    ownershipIsQuarantined = true
+                }
                 checksSinceFullDiscovery = 0
                 let preferredAnchors = Set(accounts.records.flatMap { record in
                     record.sources.filter { $0.kind == .configDir }.compactMap(\.anchor)
@@ -452,6 +475,7 @@ final class AppContainer {
                     AppLog.info(.config, "accounts: default login changed during discovery; retrying")
                     continue
                 }
+                previousDefaults = observedDefaults
                 let assembly = ProviderAccountAssembly.make(
                     accountsStore: accounts, waitsForLoginShell: true, preparedDiscovery: prepared
                 )
@@ -459,10 +483,12 @@ final class AppContainer {
                 let ownership = AccountOwnershipFingerprint(assembly)
                 let routing = AccountLogRoutingFingerprint(assembly)
                 let replacesGraph = !bootstrapped
+                    || ownershipIsQuarantined
                     || ownership != previousOwnership
                     || routing.reassignsExistingRoots(from: previousRouting)
                 guard replacesGraph || routing != previousRouting else { continue }
                 bootstrapped = true
+                ownershipIsQuarantined = false
                 previousOwnership = ownership
                 previousRouting = routing
                 if replacesGraph {

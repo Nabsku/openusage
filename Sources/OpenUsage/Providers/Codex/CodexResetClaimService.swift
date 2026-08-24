@@ -162,11 +162,20 @@ final class CodexResetClaimService {
         var lastRejection: Int?
         for credentials in candidates {
             guard !isRetiredForAccountGraphReload else { return .failed }
+            let currentCandidates = await credentialCandidates()
+            let currentCredentials = currentCandidates.first {
+                Self.belongsToSameAccount($0, as: credentials)
+                    && $0.accessToken == credentials.accessToken
+            } ?? currentCandidates.first { Self.belongsToSameAccount($0, as: credentials) }
+            guard !isRetiredForAccountGraphReload, let currentCredentials else {
+                AppLog.error(LogTag.plugin("codex"), "reset claim: the original account is no longer signed in")
+                return .failed
+            }
             let response: HTTPResponse
             do {
                 response = try await usageClient.consumeResetCredit(
-                    accessToken: credentials.accessToken,
-                    accountID: credentials.accountID,
+                    accessToken: currentCredentials.accessToken,
+                    accountID: currentCredentials.accountID,
                     creditID: creditID,
                     redeemRequestID: redeemRequestID
                 )
