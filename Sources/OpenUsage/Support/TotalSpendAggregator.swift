@@ -102,6 +102,11 @@ struct TotalSpendProjection: Equatable {
     let isEstimated: Bool
 
     var isEmpty: Bool { slices.isEmpty }
+
+    var infoTooltip: String {
+        guard !slices.isEmpty else { return metric.emptyMessage }
+        return "Only includes \(slices.map(\.title).formatted(.list(type: .and)))."
+    }
 }
 
 /// A period's cross-provider raw totals: every spend-capable provider that contributed dollars and/or

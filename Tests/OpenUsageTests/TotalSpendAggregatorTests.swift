@@ -67,7 +67,9 @@ final class TotalSpendAggregatorTests: XCTestCase {
             title: { $0.id == "claude" ? "Claude Team" : $0.displayName }
         )
 
-        XCTAssertEqual(total.projection(for: .cost).slices.map(\.title), ["Cursor", "Claude Team"])
+        let projection = total.projection(for: .cost)
+        XCTAssertEqual(projection.slices.map(\.title), ["Cursor", "Claude Team"])
+        XCTAssertEqual(projection.infoTooltip, "Only includes Cursor and Claude Team.")
     }
 
     func testProviderWithoutPeriodLineIsExcludedNotZero() {
@@ -93,6 +95,7 @@ final class TotalSpendAggregatorTests: XCTestCase {
         XCTAssertEqual(total.slices.first?.amountUSD, 0)
 
         XCTAssertTrue(total.projection(for: .cost).isEmpty)
+        XCTAssertEqual(total.projection(for: .cost).infoTooltip, TotalSpendMetric.cost.emptyMessage)
         XCTAssertTrue(total.projection(for: .costPerMtok).isEmpty)
 
         let tokens = total.projection(for: .tokens)

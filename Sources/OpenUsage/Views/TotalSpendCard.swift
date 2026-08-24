@@ -74,7 +74,7 @@ struct TotalSpendCard: View {
             Image(systemName: "info.circle")
                 .imageScale(.small)
                 .foregroundStyle(.secondary)
-                .hoverTooltip(infoTooltip)
+                .hoverTooltip(projection.infoTooltip)
             Spacer(minLength: 8)
             shareButton
         }
@@ -112,11 +112,6 @@ struct TotalSpendCard: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Total Spend Metric")
         .accessibilityValue(metric.title)
-    }
-
-    private var infoTooltip: String {
-        let names = projection.slices.map(\.title)
-        return "Only includes \(names.formatted(.list(type: .and)))."
     }
 
     private var shareButton: some View {
