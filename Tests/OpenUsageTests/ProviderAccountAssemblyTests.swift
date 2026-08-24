@@ -84,6 +84,26 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             isClaudeDiscoveryComplete: unavailable.isClaudeDiscoveryComplete
         ).first as? ClaudeProvider
         XCTAssertEqual(runtime?.authStore.allowsDesktopFallback, false)
+
+        for account in ["original-account", "swapped-account"] {
+            store.reconcile(with: [.init(
+                family: "claude", identityKey: account, label: nil,
+                sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+            )])
+        }
+        for families: Set<String> in [["codex"], []] {
+            let skipped = ProviderAccountAssembly.make(
+                observer: observer, accountsStore: store, families: families
+            )
+            XCTAssertNotEqual(skipped.defaultClaudeCardID, "claude")
+            XCTAssertEqual(skipped.identityKeysByCard[skipped.defaultClaudeCardID], "swapped-account")
+            let bound = ProviderCatalog.make(
+                defaultClaudeCardID: skipped.defaultClaudeCardID,
+                claudeIdentityKeys: skipped.identityKeysByCard,
+                isClaudeDiscoveryComplete: skipped.isClaudeDiscoveryComplete
+            ).first as? ClaudeProvider
+            XCTAssertEqual(bound?.authStore.expectedIdentityKey, "swapped-account")
+        }
     }
 
     private func makeDiscovery(

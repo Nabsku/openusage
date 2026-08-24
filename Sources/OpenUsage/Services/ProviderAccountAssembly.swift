@@ -74,12 +74,15 @@ struct ProviderAccountAssembly {
         if families.count < ProviderAccountID.families.count {
             AppLog.info(.config, "account identity read skipped for \(ProviderAccountID.families.subtracting(families).sorted().joined(separator: ", ")): login shell cold and no shell-environment snapshot exists yet")
         }
+        let resolvedAccountsStore = accountsStore ?? ProviderAccountsStore(defaults: defaults)
         guard !families.isEmpty else {
-            return ProviderAccountAssembly(identityKeysByCard: [:], isClaudeDiscoveryComplete: false)
+            return make(
+                observer: DefaultAccountObserver(), accountsStore: resolvedAccountsStore, families: []
+            )
         }
         return make(
             observer: DefaultAccountObserver(),
-            accountsStore: accountsStore ?? ProviderAccountsStore(defaults: defaults),
+            accountsStore: resolvedAccountsStore,
             families: families,
             claudeDiscovery: ClaudeConfigDirDiscovery()
         )
@@ -229,9 +232,9 @@ struct ProviderAccountAssembly {
             defaultClaudeRecord = identityKeys["claude"].flatMap { observed in
                 badgeHolder?.matches(identityKey: observed) == true ? badgeHolder : nil
             }
-        case .unresolved:
+        case .unresolved, .none:
             defaultClaudeRecord = badgeHolder
-        case .absent, .none:
+        case .absent:
             defaultClaudeRecord = nil
         }
         if let defaultClaudeRecord {
