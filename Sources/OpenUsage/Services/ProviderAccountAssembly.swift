@@ -75,7 +75,7 @@ struct ProviderAccountAssembly {
             AppLog.info(.config, "account identity read skipped for \(ProviderAccountID.families.subtracting(families).sorted().joined(separator: ", ")): login shell cold and no shell-environment snapshot exists yet")
         }
         guard !families.isEmpty else {
-            return ProviderAccountAssembly(identityKeysByCard: [:])
+            return ProviderAccountAssembly(identityKeysByCard: [:], isClaudeDiscoveryComplete: false)
         }
         return make(
             observer: DefaultAccountObserver(),
@@ -139,7 +139,7 @@ struct ProviderAccountAssembly {
         // and a custom-dir-only login should still get its card.
         var foundClaudeAccounts: [(identityKey: String, label: String?, dirs: [ClaudeConfigDirDiscovery.Finding])] = []
         var defaultClaudeExtraLogRoots: [URL] = []
-        var isClaudeDiscoveryComplete = true
+        var isClaudeDiscoveryComplete = families.contains("claude")
         let preferredConfigAnchors = Dictionary(uniqueKeysWithValues: accountsStore.records.compactMap { record in
             record.sources.first { $0.kind == .configDir }?.anchor.map { (record.identityKey, $0) }
         })

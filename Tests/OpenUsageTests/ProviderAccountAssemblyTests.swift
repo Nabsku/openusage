@@ -77,6 +77,13 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         XCTAssertEqual(assembly.identityKeysByCard, ["codex": "codex-1"])
         XCTAssertNil(store.defaultBadgeHolder(family: "claude"), "an out-of-pass family must not be reconciled")
+        XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        let unavailable = ProviderAccountAssembly.make(observer: observer, accountsStore: store, families: [])
+        XCTAssertFalse(unavailable.isClaudeDiscoveryComplete)
+        let runtime = ProviderCatalog.make(
+            isClaudeDiscoveryComplete: unavailable.isClaudeDiscoveryComplete
+        ).first as? ClaudeProvider
+        XCTAssertEqual(runtime?.authStore.allowsDesktopFallback, false)
     }
 
     private func makeDiscovery(
