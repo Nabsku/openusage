@@ -380,6 +380,11 @@ struct ClaudeAuthStore: Sendable {
     private func orderedStoredCandidates() -> [ClaudeCredentialState] {
         // A desktop-only card has no CLI sources at all.
         if case .desktopOnly = scope { return [] }
+        if case .standard = scope, expectedIdentityKey == nil,
+           desktopAccessPolicy == .denied, !allowsUnscopedStandardKeychainFallback
+        {
+            return []
+        }
         var candidates: [ClaudeCredentialState] = []
         if let keychain = loadKeychainCredentials() { candidates.append(keychain) }
         if let file = loadFileCredentials() { candidates.append(file) }

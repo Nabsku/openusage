@@ -371,6 +371,37 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertFalse(assembly.allowsUnboundClaudeFallback)
     }
 
+    func testDefaultLogoutKeepsAnUnboundLogOnlyCardWithoutCredentialFallback() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [.init(
+            family: "claude", identityKey: "previous", label: nil,
+            sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+        )])
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(), files: FakeFiles(), keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let assembly = ProviderAccountAssembly.make(observer: observer, accountsStore: store)
+        let providers = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards, claudeIdentityKeys: assembly.identityKeysByCard,
+            allowsUnboundClaudeFallback: assembly.allowsUnboundClaudeFallback,
+            defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
+        ).compactMap { $0 as? ClaudeProvider }
+
+        let provider = try XCTUnwrap(providers.first)
+        XCTAssertEqual(providers.map(\.provider.id), ["claude"])
+        XCTAssertNil(assembly.identityKeysByCard["claude"])
+        XCTAssertNil(provider.authStore.expectedIdentityKey)
+        XCTAssertEqual(provider.authStore.desktopAccessPolicy, .denied)
+        XCTAssertFalse(provider.authStore.allowsUnscopedStandardKeychainFallback)
+        let protected = ClaudeAuthStore(
+            files: FakeFiles(),
+            keychain: FakeKeychain(#"{"claudeAiOauth":{"accessToken":"other-account"}}"#),
+            desktopAccessPolicy: .denied, allowsUnscopedStandardKeychainFallback: false
+        )
+        XCTAssertTrue(protected.loadCredentialCandidates().isEmpty)
+    }
+
     func testUnreadableKnownDefaultKeepsItsOwnershipWhileScanningVerifiedConfigAccounts() throws {
         for candidate in ["previous", "work"] {
             let store = ProviderAccountsStore(defaults: makeScratchDefaults())
@@ -531,6 +562,22 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
         XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
         XCTAssertEqual(store.records.count, 1)
+    }
+
+    func testInvalidCoworkIdentityQuarantinesAllDesktopRoots() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let sandbox = "\(coworkBase)/local_1/.claude"
+        let cowork = makeCoworkDiscovery(files: [sandbox + "/.claude.json": "{"], sandboxes: [sandbox])
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork,
+            hasDesktopCredentialMaterial: { true }
+        )
+
+        XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        XCTAssertTrue(assembly.claudeCards.isEmpty)
+        XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
+        XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
     }
 
     func testADistinctCoworkAccountBecomesOneDesktopBackedCardAndPartitionsTheWalk() throws {

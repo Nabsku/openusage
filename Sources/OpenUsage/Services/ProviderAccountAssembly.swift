@@ -326,11 +326,7 @@ struct ProviderAccountAssembly {
             var quarantinedUnidentifiedSandbox = false
             for sandbox in scan.truncated ? [] : scan.sandboxes {
                 guard let rawIdentity = sandbox.identityKey else {
-                    if desktopPolicy.hasMultipleAccounts {
-                        quarantinedUnidentifiedSandbox = true
-                    } else {
-                        defaultBucket.append(sandbox.root)
-                    }
+                    quarantinedUnidentifiedSandbox = true
                     continue
                 }
                 guard let key = desktopPolicy.canonical(rawIdentity) else {
@@ -461,7 +457,8 @@ struct ProviderAccountAssembly {
         let desktopAccess = if let defaultKey = identityKeys[defaultClaudeRecord?.id ?? "claude"] {
             desktopPolicy.access(for: defaultKey, allowsActiveOrganization: allowsActiveOrganization)
         } else {
-            allowsActiveOrganization ? ClaudeDesktopAccessPolicy.activeOrganization : .denied
+            allowsActiveOrganization && !records.contains { $0.family == "claude" }
+                ? ClaudeDesktopAccessPolicy.activeOrganization : .denied
         }
         return ProviderAccountAssembly(
             identityKeysByCard: identityKeys,

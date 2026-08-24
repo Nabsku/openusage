@@ -8,6 +8,7 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
     private let home = URL(fileURLWithPath: "/fixture-home", isDirectory: true)
     private let organization = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     private let otherOrganization = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    private let account = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
     private let clientID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     private let otherClientID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
     private let password = "fixture-safe-storage-password"
@@ -40,6 +41,19 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(result.oauth?.accessToken, "desktop-token")
         XCTAssertNil(result.oauth?.refreshToken)
         XCTAssertEqual(result.oauth?.scopes, ["user:profile", "user:inference"])
+    }
+
+    func testLastKnownAccountIsOnlyAHintAfterDesktopLogout() throws {
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
+        )
+        XCTAssertEqual(fixture.store.lastKnownAccountUUID(), account)
+        fixture.files.files.removeValue(forKey: home.appendingPathComponent(
+            "Library/Application Support/Claude/Cookies"
+        ).path)
+        XCTAssertFalse(fixture.store.hasCredentialMaterial())
+        XCTAssertEqual(fixture.store.lastKnownAccountUUID(), account)
     }
 
     func testV1FallbackDoesNotOverrideTombstonedV2Key() throws {
@@ -329,7 +343,11 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             activeOrganization: organization,
             v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
         )
+        let profile = Data(#"{"account":{"uuid":"\#(account)"},"organization":{"uuid":"\#(organization)"}}"#.utf8)
         let httpClient = RoutingHTTPClient { request in
+            if request.url.path == "/api/oauth/profile" {
+                return HTTPResponse(statusCode: 200, headers: [:], body: profile)
+            }
             XCTAssertTrue(request.url.absoluteString.hasSuffix("/api/oauth/usage"))
             return HTTPResponse(statusCode: 401, headers: [:], body: Data())
         }
@@ -353,7 +371,49 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         }
 
         XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.desktopTokenExpired.localizedDescription)
-        XCTAssertEqual(httpClient.requests.count, 1)
+        XCTAssertEqual(httpClient.requests.count, 2)
+    }
+
+    @MainActor
+    func testDesktopProfileRejectsAnotherUserEvenWhenTheOrganizationMatches() async throws {
+        for (observedUser, observedOrganization, matches) in [
+            (account, organization, true),
+            ("ffffffff-ffff-4fff-8fff-ffffffffffff", organization, false),
+            (account, otherOrganization, false)
+        ] {
+            let fixture = try makeFixture(
+                activeOrganization: organization,
+                v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
+            )
+            let profile = Data(#"{"account":{"uuid":"\#(observedUser)"},"organization":{"uuid":"\#(observedOrganization)"}}"#.utf8)
+            let httpClient = RoutingHTTPClient { request in
+                if request.url.path == "/api/oauth/profile" {
+                    XCTAssertEqual(request.headers["Authorization"], "Bearer desktop-token")
+                    return HTTPResponse(statusCode: 200, headers: [:], body: profile)
+                }
+                return HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))
+            }
+            let now = now
+            let provider = ClaudeProvider(
+                authStore: ClaudeAuthStore(
+                    files: fixture.files, keychain: FakeKeychain(), desktop: fixture.store,
+                    scope: .desktopOnly(organization: organization),
+                    expectedIdentityKey: "\(account)|\(organization)", now: { now }
+                ),
+                usageClient: ClaudeUsageClient(httpClient: httpClient),
+                logUsageScanner: ClaudeLogFixture.scanner(home: nil), now: { now },
+                pricing: { TestPricing.bundled }
+            )
+
+            let snapshot = await provider.refresh()
+
+            XCTAssertEqual(badge(snapshot.lines, "Error") == nil, matches)
+            XCTAssertEqual(httpClient.requests.contains { $0.url.path == "/api/oauth/usage" }, matches)
+            if matches {
+                _ = await provider.refresh()
+                XCTAssertEqual(httpClient.requests.filter { $0.url.path == "/api/oauth/profile" }.count, 1)
+            }
+        }
     }
 
     @MainActor
@@ -363,9 +423,13 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
         )
         let now = now
+        let profile = Data(#"{"account":{"uuid":"\#(account)"},"organization":{"uuid":"\#(organization)"}}"#.utf8)
         let httpClient = RoutingHTTPClient { request in
             let authorization = request.headers["Authorization"] ?? ""
             if authorization.contains("desktop-token") {
+                if request.url.path == "/api/oauth/profile" {
+                    return HTTPResponse(statusCode: 200, headers: [:], body: profile)
+                }
                 return HTTPResponse(
                     statusCode: 200,
                     headers: [:],
@@ -395,7 +459,7 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         }
 
         XCTAssertNil(badge(snapshot.lines, "Error"))
-        XCTAssertEqual(httpClient.requests.count, 2)
+        XCTAssertEqual(httpClient.requests.count, 3)
         XCTAssertTrue(httpClient.requests.last?.headers["Authorization"]?.contains("desktop-token") == true)
     }
 
@@ -406,9 +470,13 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
         )
         let now = now
+        let profile = Data(#"{"account":{"uuid":"\#(account)"},"organization":{"uuid":"\#(organization)"}}"#.utf8)
         let httpClient = RoutingHTTPClient { request in
             let authorization = request.headers["Authorization"] ?? ""
             if authorization.contains("desktop-token") {
+                if request.url.path == "/api/oauth/profile" {
+                    return HTTPResponse(statusCode: 200, headers: [:], body: profile)
+                }
                 return HTTPResponse(
                     statusCode: 200,
                     headers: [:],
@@ -441,7 +509,7 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         }
 
         XCTAssertNil(badge(snapshot.lines, "Error"))
-        XCTAssertEqual(httpClient.requests.count, 2)
+        XCTAssertEqual(httpClient.requests.count, 3)
         XCTAssertTrue(httpClient.requests.last?.headers["Authorization"]?.contains("desktop-token") == true)
     }
 
@@ -491,7 +559,10 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         let encryptedCookie = try encrypt(cookiePlaintext, key: key)
         let v2Data = try JSONSerialization.data(withJSONObject: v2)
         let encryptedV2 = try encrypt(v2Data, key: key)
-        var config: [String: Any] = ["oauth:tokenCacheV2": encryptedV2.base64EncodedString()]
+        var config: [String: Any] = [
+            "oauth:tokenCacheV2": encryptedV2.base64EncodedString(),
+            "lastKnownAccountUuid": account
+        ]
         if let v1 {
             let v1Data = try JSONSerialization.data(withJSONObject: v1)
             config["oauth:tokenCache"] = try encrypt(v1Data, key: key).base64EncodedString()

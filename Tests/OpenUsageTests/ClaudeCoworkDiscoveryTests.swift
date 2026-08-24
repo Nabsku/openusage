@@ -53,5 +53,27 @@ final class ClaudeCoworkDiscoveryTests: XCTestCase {
         let result = discovery.run()
 
         XCTAssertEqual(result.sandboxes.first?.identityKey, nil)
+        XCTAssertTrue(result.truncated)
     }
+
+    func testUnreadableIdentityMarksTheEntireWalkIncomplete() {
+        let discovery = ClaudeCoworkDiscovery(
+            files: UnreadableCoworkFiles(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSandboxes: { _ in [URL(fileURLWithPath: "/Users/dev/cowork/.claude")] }
+        )
+
+        let result = discovery.run()
+
+        XCTAssertTrue(result.truncated)
+        XCTAssertNil(result.sandboxes.first?.identityKey)
+        XCTAssertTrue(result.notes.contains { $0.contains("quarantined") })
+    }
+}
+
+private struct UnreadableCoworkFiles: TextFileAccessing {
+    func exists(_ path: String) -> Bool { true }
+    func readText(_ path: String) throws -> String { throw CocoaError(.fileReadNoPermission) }
+    func writeText(_ path: String, _ text: String) throws {}
+    func remove(_ path: String) throws {}
 }

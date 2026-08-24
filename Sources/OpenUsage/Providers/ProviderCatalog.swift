@@ -31,8 +31,7 @@ enum ProviderCatalog {
         // account registry and are resolved at render time (`ProviderAccountRecord.resolvedDisplayName`),
         // so a baked name can never be a stale copy of one.
         var runtimes: [ProviderRuntime] = []
-        if (claudeIdentityKeys[defaultClaudeCardID] != nil
-            || (claudeCards.isEmpty && allowsUnboundClaudeFallback))
+        if (claudeIdentityKeys[defaultClaudeCardID] != nil || claudeCards.isEmpty)
             && !claudeCards.contains(where: { $0.id == defaultClaudeCardID })
         {
             runtimes.append(ClaudeProvider(
@@ -46,9 +45,11 @@ enum ProviderCatalog {
                     desktopAccessPolicy: defaultClaudeDesktopAccess
                         ?? (claudeCards.isEmpty
                             && (isClaudeDiscoveryComplete || allowsUnownedClaudeDesktopFallback)
+                            && (allowsUnboundClaudeFallback || claudeIdentityKeys[defaultClaudeCardID] != nil)
                             ? .activeOrganization : .denied),
                     allowsUnscopedStandardKeychainFallback: claudeCards.isEmpty
                         && isClaudeDiscoveryComplete
+                        && (allowsUnboundClaudeFallback || claudeIdentityKeys[defaultClaudeCardID] != nil)
                         && defaultClaudeDesktopAccess != .denied
                 ),
                 logUsageScanner: ClaudeLogUsageScanner(

@@ -31,6 +31,13 @@ enum ClaudeUsageError: Error, LocalizedError, Equatable {
 
 struct ClaudeUsageClient: Sendable {
     private static let scopes = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+    private static let profileURL = URL(string: "https://api.anthropic.com/api/oauth/profile")!
+
+    private struct AccountProfile: Decodable {
+        struct Identity: Decodable { var uuid: String }
+        var account: Identity
+        var organization: Identity?
+    }
 
     var httpClient: HTTPClient
 
@@ -73,5 +80,27 @@ struct ClaudeUsageClient: Sendable {
             )
         )
     }
-}
 
+    func verifyDesktopAccount(accessToken: String, expected: ClaudeIdentity) async throws {
+        let response = try await httpClient.send(HTTPRequest(
+            method: "GET", url: Self.profileURL,
+            headers: [
+                "Authorization": "Bearer \(accessToken.trimmingCharacters(in: .whitespacesAndNewlines))",
+                "Accept": "application/json",
+                "anthropic-beta": "oauth-2025-04-20"
+            ], timeout: 10
+        ))
+        guard (200..<300).contains(response.statusCode),
+              let profile = try? JSONDecoder().decode(AccountProfile.self, from: response.body),
+              profile.account.uuid.caseInsensitiveCompare(expected.user) == .orderedSame,
+              profile.organization.map({ organization in
+                  expected.organization.map {
+                      organization.uuid.caseInsensitiveCompare($0) == .orderedSame
+                  } ?? true
+              }) ?? true
+        else {
+            AppLog.warn(LogTag.auth("claude"), "Claude Desktop account ownership could not be verified")
+            throw ClaudeAuthError.desktopCredentialsUnavailable
+        }
+    }
+}

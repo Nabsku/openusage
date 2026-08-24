@@ -75,7 +75,7 @@ enum ClaudeDesktopCredentialError: Error, Sendable {
 /// tokens, so using one here would invalidate Claude Desktop's copy. OpenUsage only borrows a currently
 /// valid access token and waits for Desktop to renew it.
 struct ClaudeDesktopAuthStore: Sendable {
-    private static let configRelativePath = "Library/Application Support/Claude/config.json"
+    static let configRelativePath = "Library/Application Support/Claude/config.json"
     private static let cookieRelativePaths = [
         "Library/Application Support/Claude/Cookies",
         "Library/Application Support/Claude/Network/Cookies"
@@ -121,6 +121,17 @@ struct ClaudeDesktopAuthStore: Sendable {
             return false
         }
         return Self.cookieRelativePaths.contains { files.exists(path($0)) }
+    }
+
+    /// Desktop retains this value after logout, so it is only an ownership hint, never login proof.
+    func lastKnownAccountUUID() -> String? {
+        guard let text = try? files.readTextIfPresent(path(Self.configRelativePath)),
+              let data = text.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = root["lastKnownAccountUuid"] as? String,
+              UUID(uuidString: account) != nil
+        else { return nil }
+        return account.lowercased()
     }
 
     /// `organization` pins the read to one org's cached token (a Desktop-backed account card for a

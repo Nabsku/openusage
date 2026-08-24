@@ -29,6 +29,7 @@ final class ClaudeProvider: ProviderRuntime {
     /// last-good bars with a staleness note instead of blanking the dashboard, and skip the live call
     /// entirely until the cooldown expires so the app doesn't keep hitting an already limited endpoint.
     private var cachedCredentialFingerprint: Data?
+    private var verifiedDesktopCredentialFingerprint: Data?
     private var lastGoodUsage: ClaudeMappedUsage?
     private var rateLimitedUntil: Date?
     private static let rateLimitCooldown: TimeInterval = 5 * 60
@@ -249,6 +250,22 @@ final class ClaudeProvider: ProviderRuntime {
         fallbackWarning: String?
     ) async throws -> ProviderSnapshot {
         var state = initialState
+        if state.source == .desktop {
+            guard let identityKey = authStore.expectedIdentityKey ?? authStore.desktop.lastKnownAccountUUID(),
+                  let account = ClaudeIdentity(identityKey),
+                  let accessToken = state.oauth.accessToken
+            else { throw ClaudeAuthError.desktopCredentialsUnavailable }
+            let expected = account.organization == nil
+                ? authStore.standardDesktopOrganization.flatMap {
+                    ClaudeIdentity("\(account.user)|\($0)")
+                } ?? account
+                : account
+            let fingerprint = Data(SHA256.hash(data: Data("\(expected.key)\u{0}\(accessToken)".utf8)))
+            if verifiedDesktopCredentialFingerprint != fingerprint {
+                try await usageClient.verifyDesktopAccount(accessToken: accessToken, expected: expected)
+                verifiedDesktopCredentialFingerprint = fingerprint
+            }
+        }
         var mapped = ClaudeMappedUsage(
             plan: ClaudeUsageMapper.formatPlan(
                 subscriptionType: state.oauth.subscriptionType,

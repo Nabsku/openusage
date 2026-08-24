@@ -73,28 +73,40 @@ struct ClaudeCoworkDiscovery {
                 result.truncated = true
                 break
             }
-            result.sandboxes.append(sandbox(at: root, notes: &result.notes))
+            var unreadable = false
+            let sandbox = sandbox(at: root, notes: &result.notes, unreadable: &unreadable)
+            result.sandboxes.append(sandbox)
+            if unreadable {
+                result.truncated = true
+                break
+            }
         }
         return result
     }
 
-    private func sandbox(at root: URL, notes: inout [String]) -> Sandbox {
+    private func sandbox(at root: URL, notes: inout [String], unreadable: inout Bool) -> Sandbox {
         let identityText: String?
         do {
             identityText = try files.readTextIfPresent(root.path + "/.claude.json")
         } catch {
-            notes.append("cowork sandbox \(logPath(root.path)): identity file unreadable → kept on the default card")
+            notes.append("cowork sandbox \(logPath(root.path)): identity file unreadable → account routing quarantined")
+            unreadable = true
             return Sandbox(root: root)
         }
-        guard let identityText,
-              let parsed = try? JSONDecoder().decode(
+        guard let identityText else { return Sandbox(root: root) }
+        guard let parsed = try? JSONDecoder().decode(
                   DefaultAccountObserver.ClaudeStateFile.self, from: Data(identityText.utf8)
-              ),
-              let account = parsed.oauthAccount,
+              )
+        else {
+            notes.append("cowork sandbox \(logPath(root.path)): identity file invalid → account routing quarantined")
+            unreadable = true
+            return Sandbox(root: root)
+        }
+        guard let account = parsed.oauthAccount,
               let key = DefaultAccountObserver.claudeIdentityKey(account)
         else {
-            // No identity = a sandbox the default login produced before identity files existed, or
-            // one mid-creation. The built-in walk has always counted these on the default card.
+            notes.append("cowork sandbox \(logPath(root.path)): account identity unavailable → account routing quarantined")
+            unreadable = true
             return Sandbox(root: root)
         }
         return Sandbox(
