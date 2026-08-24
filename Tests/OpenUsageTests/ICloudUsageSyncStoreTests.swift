@@ -58,6 +58,21 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "openusage.icloudSync.enabled.v1"))
     }
 
+    func testShutdownNeverTouchesCloudWhenSyncWasNeverEnabled() async throws {
+        let defaults = makeDefaults("never-enabled")
+        let fileStore = RecordingHistoryFileStore()
+        let sync = makeSync(defaults, fileStore: fileStore)
+
+        sync.shutdownForAccountGraphReload()
+        for _ in 0..<10 { await Task.yield() }
+
+        let deletedDeviceIDs = await fileStore.deletedDeviceIDs
+        let writeCount = await fileStore.writeCount
+        XCTAssertTrue(deletedDeviceIDs.isEmpty)
+        XCTAssertEqual(writeCount, 0)
+        XCTAssertNil(sync.serviceError)
+    }
+
     func testAccountGraphShutdownCancelsInFlightWriteWithoutReplacingExistingFile() async throws {
         let defaults = makeDefaults("account-graph-shutdown-in-flight")
         let deviceIDStore = MemoryDeviceIDStore()
@@ -112,6 +127,28 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         let deletedDeviceIDs = await fileStore.deletedDeviceIDs
         XCTAssertEqual(documents, [currentDocument])
         XCTAssertTrue(deletedDeviceIDs.isEmpty)
+    }
+
+    func testReenableWaitsForAnInFlightDisableDeletion() async throws {
+        let defaults = makeDefaults("reenable-during-delete")
+        let fileStore = RecordingHistoryFileStore()
+        let sync = makeSync(defaults, fileStore: fileStore)
+        sync.enabled = true
+        try await waitUntil { await fileStore.writeCount == 1 && !sync.isSyncing }
+
+        await fileStore.holdNextDelete()
+        sync.enabled = false
+        try await waitUntil { await fileStore.deleteIsHeld }
+        sync.enabled = true
+
+        for _ in 0..<10 { await Task.yield() }
+        let writesBeforeDeletion = await fileStore.writeCount
+        XCTAssertEqual(writesBeforeDeletion, 1)
+
+        await fileStore.releaseDelete()
+        try await waitUntil { await fileStore.writeCount == 2 && !sync.isSyncing }
+        let documents = await fileStore.documents
+        XCTAssertEqual(documents.map(\.deviceID), [sync.deviceID])
     }
 
     func testCanceledCoordinatedAccessorCannotOverwriteReplacementAccountDocument() async throws {

@@ -183,6 +183,7 @@ final class ICloudUsageSyncStore {
     private var notificationTokens: [NSObjectProtocol] = []
     private var syncActivityCount = 0
     private var isShutDownForAccountGraphReload = false
+    private var disableCleanupPending = false
 
     let deviceID: String
     let deviceName: String
@@ -190,8 +191,15 @@ final class ICloudUsageSyncStore {
         didSet {
             guard enabled != oldValue else { return }
             defaults.set(enabled, forKey: Self.enabledKey)
-            activationTask?.cancel()
-            activationTask = Task { [weak self] in await self?.applyEnabledChange() }
+            if !enabled { disableCleanupPending = true }
+            let previousActivation = activationTask
+            previousActivation?.cancel()
+            let isEnabling = enabled
+            activationTask = Task { [weak self] in
+                if isEnabling { await previousActivation?.value }
+                guard !Task.isCancelled else { return }
+                await self?.applyEnabledChange()
+            }
         }
     }
     private(set) var isSyncing = false
@@ -256,7 +264,7 @@ final class ICloudUsageSyncStore {
         dataStore.onLocalHistoryChanged = nil
         stopObserving()
 
-        guard !enabled else { return }
+        guard !enabled, disableCleanupPending else { return }
         // Opt-out may have queued its deletion without getting a chance to run before the graph was
         // retired. Finish independently of that worker, and serialize every later graph's activation
         // behind this device's cleanup so a delayed delete cannot remove its replacement's new file.
@@ -298,8 +306,11 @@ final class ICloudUsageSyncStore {
             invalidFileMessages = []
             do {
                 try await fileStore.delete(deviceID: deviceID)
+                disableCleanupPending = false
+                guard !Task.isCancelled, !isShutDownForAccountGraphReload, !enabled else { return }
                 operationError = nil
             } catch {
+                guard !Task.isCancelled, !isShutDownForAccountGraphReload, !enabled else { return }
                 report(error, context: "disable")
             }
         }
