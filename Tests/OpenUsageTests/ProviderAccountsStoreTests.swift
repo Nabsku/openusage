@@ -62,7 +62,7 @@ final class ProviderAccountsStoreTests: XCTestCase {
 
     func testUnknownFutureSourceSurvivesDecodingReconciliationAndPersistence() throws {
         let defaults = makeScratchDefaults()
-        let future = ProviderAccountSource.Kind(rawValue: "desktop")
+        let future = ProviderAccountSource.Kind(rawValue: "future-account-source")
         let existing = ProviderAccountRecord(
             id: "claude", family: "claude", identityKey: "account-a",
             identityAliases: ["previous-account-a"], label: "Personal",
@@ -79,7 +79,7 @@ final class ProviderAccountsStoreTests: XCTestCase {
         let restored = try XCTUnwrap(ProviderAccountsStore(defaults: defaults).records.first)
         XCTAssertEqual(restored.identityKey, "account-a")
         XCTAssertEqual(restored.identityAliases, ["previous-account-a"])
-        XCTAssertEqual(restored.sources.map(\.kind.rawValue), ["defaultHome", "desktop"])
+        XCTAssertEqual(restored.sources.map(\.kind.rawValue), ["defaultHome", "future-account-source"])
     }
 
     func testObservedIdentityAliasPreservesExistingAccountNameAndDefaultBadge() throws {
