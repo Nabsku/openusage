@@ -548,6 +548,56 @@ final class CodexProviderTests: XCTestCase {
         }
     }
 
+    func testBoundAccountRejectsAnotherLoginWithoutPublishingOrCachingIt() async {
+        let suite = "OpenUsageTests.CodexOwnership.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8)))
+        let provider = CodexProvider(
+            authStore: CodexAuthStore(
+                environment: FakeEnvironment(["CODEX_HOME": "/tmp/codex-owned"]),
+                files: FakeFiles([
+                    "/tmp/codex-owned/auth.json": #"{"tokens":{"access_token":"token-b","account_id":"account-b"}}"#,
+                ]),
+                keychain: FakeKeychain()
+            ),
+            usageClient: CodexUsageClient(http: http),
+            expectedIdentityKey: "account-a"
+        )
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "ownership")
+        let store = WidgetDataStore(
+            registry: WidgetRegistry.from([provider]), providers: [provider], cache: cache,
+            defaults: defaults, providerIdentityKeys: ["codex": "account-a"]
+        )
+
+        let outcome = await store.refresh(providerID: "codex", force: true)
+
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertNil(cache.snapshot(providerID: "codex"))
+        XCTAssertTrue(http.requests.isEmpty)
+    }
+
+    func testBoundAccountAcceptsVerifiedIdentityTokenOwnership() async throws {
+        let path = "/tmp/codex-owned/auth.json"
+        let payload = Data(#"{"https://api.openai.com/auth":{"chatgpt_account_id":"account-a"}}"#.utf8)
+            .base64EncodedString()
+        let owned = #"{"tokens":{"access_token":"token-a","id_token":"header.\#(payload).signature"}}"#
+        let response = HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"plan_type":"plus"}"#.utf8))
+        let home = try CodexLogFixture.makeHome(files: [:])
+        let matching = CodexProvider(
+            authStore: CodexAuthStore(
+                environment: FakeEnvironment(["CODEX_HOME": "/tmp/codex-owned"]),
+                files: FakeFiles([path: owned]), keychain: FakeKeychain()
+            ),
+            usageClient: CodexUsageClient(http: FakeHTTPClient(response: response)),
+            logUsageScanner: CodexLogFixture.scanner(home: home),
+            expectedIdentityKey: "ACCOUNT-A"
+        )
+
+        let validSnapshot = await matching.refresh()
+        XCTAssertEqual(validSnapshot.plan, "Plus")
+    }
+
     func testNoUsageDataBadgeIsDroppedWhenLocalLogsHaveSpend() async throws {
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         // The live usage API returns nothing mappable (empty body -> no metric lines)...
