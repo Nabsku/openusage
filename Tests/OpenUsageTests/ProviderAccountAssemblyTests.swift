@@ -222,10 +222,23 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
         )
 
-        let assembly = ProviderAccountAssembly.make(observer: observer, accountsStore: store)
+        let discovery = makeDiscovery(
+            files: [
+                "/Users/dev/.claude-work/.claude.json":
+                    #"{"oauthAccount":{"accountUuid":"ACCT-1","organizationUuid":"ORG-1"}}"#,
+                "/Users/dev/.claude-work/.credentials.json":
+                    #"{"claudeAiOauth":{"accessToken":"same-account"}}"#,
+            ],
+            subdirectories: ["/Users/dev/.claude-work"]
+        )
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer, accountsStore: store, claudeDiscovery: discovery
+        )
 
         XCTAssertEqual(store.records.map(\.id), ["claude"])
         XCTAssertEqual(assembly.identityKeysByCard["claude"], "acct-1")
+        XCTAssertTrue(assembly.claudeCards.isEmpty)
+        XCTAssertEqual(assembly.defaultClaudeExtraLogRoots.map(\.path), ["/Users/dev/.claude-work"])
     }
 
     func testNoDefaultLoginStillAcceptsAConfigDirOnlyAccount() throws {

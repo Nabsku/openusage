@@ -179,12 +179,22 @@ struct ProviderAccountAssembly {
                             keychainLiteral: $0.keychainLiteral
                         )
                     }
-                    if identityKey == defaultKey {
+                    let matchesDefault = defaultKey.map { observedDefault in
+                        identityKey.caseInsensitiveCompare(observedDefault) == .orderedSame
+                            || accountsStore.records.contains {
+                                $0.family == "claude"
+                                    && $0.matches(identityKey: observedDefault)
+                                    && $0.matches(identityKey: identityKey)
+                            }
+                    } ?? false
+                    if matchesDefault {
                         // Same account as the default card: its dirs are extra spend-log roots on
                         // that card, never a second card — duplicate cards are structurally
                         // impossible because identity routes the source to the existing record.
                         defaultClaudeExtraLogRoots += findings.map { URL(fileURLWithPath: $0.anchorPath) }
-                        if let index = observations.firstIndex(where: { $0.family == "claude" && $0.identityKey == identityKey }) {
+                        if let index = observations.firstIndex(where: {
+                            $0.family == "claude" && $0.identityKey == defaultKey
+                        }) {
                             observations[index].sources += sources
                         }
                         AppLog.info(.config, "discovery: \(findings.count) config dir(s) fold onto the default claude card (same account)")
