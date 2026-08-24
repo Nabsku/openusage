@@ -82,6 +82,23 @@ final class ProviderAccountsStoreTests: XCTestCase {
         XCTAssertEqual(restored.sources.map(\.kind.rawValue), ["defaultHome", "desktop"])
     }
 
+    func testObservedIdentityAliasPreservesExistingAccountNameAndDefaultBadge() throws {
+        let defaults = makeScratchDefaults()
+        let existing = ProviderAccountRecord(
+            id: "claude", family: "claude", identityKey: "account-a|org-a",
+            identityAliases: ["ACCOUNT-A"], label: "Personal", customLabel: "My Account",
+            sources: [.init(kind: .defaultHome, anchor: "/old", holdsDefaultSource: true)]
+        )
+        defaults.set(try JSONEncoder().encode([existing]), forKey: ProviderAccountsStore.storageKey)
+        let store = ProviderAccountsStore(defaults: defaults)
+
+        store.reconcile(with: [defaultHomeObservation(family: "claude", identityKey: "account-a")])
+
+        XCTAssertEqual(store.records.count, 1)
+        XCTAssertEqual(store.defaultBadgeHolder(family: "claude")?.identityKey, "account-a|org-a")
+        XCTAssertEqual(store.record(for: "claude")?.customLabel, "My Account")
+    }
+
     func testSwappedDefaultMintsAHashIDAndTakesTheBadge() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         store.reconcile(with: [defaultHomeObservation(family: "claude", identityKey: "acct-a")])

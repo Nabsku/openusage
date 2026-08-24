@@ -109,6 +109,13 @@ final class DefaultAccountObserverTests: XCTestCase {
         XCTAssertEqual(observer.observeClaude(), .unresolved(reason: "credentials present but no identity file"))
     }
 
+    func testClaudeKeychainCredentialsWithoutStateFileAreUnresolvedNotAbsent() {
+        let observer = makeObserver(keychainValue: "keychain-only-account")
+        guard case .unresolved = observer.observeClaude() else {
+            return XCTFail("an unidentifiable Keychain login must never be considered logged out")
+        }
+    }
+
     func testClaudeNoFootprintIsAbsent() {
         XCTAssertEqual(makeObserver().observeClaude(), .absent)
     }

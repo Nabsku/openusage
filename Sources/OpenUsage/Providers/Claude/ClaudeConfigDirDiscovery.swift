@@ -171,16 +171,27 @@ struct ClaudeConfigDirDiscovery {
             .claudeAiOauth?.accessToken?.nilIfEmpty != nil
 
         var matchedLiteral: String?
+        var keychainOwnershipUncertain = false
         let literals = keychainLiterals(for: url)
         for literal in literals {
             let service = ClaudeAuthStore.scopedKeychainServiceName(
                 forConfigDirLiteral: literal,
                 environment: environment
             )
-            if keychain.genericPasswordExists(service: service) == true {
+            switch keychain.genericPasswordExists(service: service) {
+            case true:
                 matchedLiteral = literal
                 break
+            case nil:
+                keychainOwnershipUncertain = true
+            case false:
+                break
             }
+            if matchedLiteral != nil { break }
+        }
+        if !fileBacked, matchedLiteral == nil, keychainOwnershipUncertain {
+            recordReadFailure(CocoaError(.fileReadNoPermission), candidate: url, result: &result)
+            return nil
         }
         guard fileBacked || matchedLiteral != nil else {
             result.notes.append("claude candidate \(logPath(url.path)): identity \(hash8(key)) but no credential (no .credentials.json, no keychain item for \(literals.count) path spellings) → skipped")

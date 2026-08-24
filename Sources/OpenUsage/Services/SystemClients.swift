@@ -222,6 +222,7 @@ enum SQLiteError: Error, LocalizedError, Equatable {
 }
 
 protocol KeychainAccessing: Sendable {
+    func genericPasswordExists(service: String) -> Bool?
     func readGenericPassword(service: String) throws -> String?
     func writeGenericPassword(service: String, value: String) throws
     func readGenericPasswordForCurrentUser(service: String) throws -> String?

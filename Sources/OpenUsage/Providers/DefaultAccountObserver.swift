@@ -88,12 +88,14 @@ struct DefaultAccountObserver: Sendable {
     /// when exported, else `~/.claude`. A comma-separated list can't be assigned one identity.
     func observeClaude() -> Outcome {
         var configDir = "~/.claude"
+        var usesScopedKeychain = false
         if let raw = environment.value(for: "CLAUDE_CONFIG_DIR")?
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
             guard !raw.contains(",") else {
                 return .unresolved(reason: "CLAUDE_CONFIG_DIR is a comma-separated list")
             }
             configDir = raw
+            usesScopedKeychain = true
         }
         let location = Self.claudeLocation(configDir: configDir, homeDirectory: homeDirectory())
         let anchor = location.anchor
@@ -104,10 +106,17 @@ struct DefaultAccountObserver: Sendable {
             return .unresolved(reason: "identity file unreadable: \(error.localizedDescription)")
         }
         guard let text else {
-            // No state file. A credential file without it can't be attributed; no footprint = absent.
-            return files.exists(anchor + "/.credentials.json")
-                ? .unresolved(reason: "credentials present but no identity file")
-                : .absent
+            if files.exists(anchor + "/.credentials.json") {
+                return .unresolved(reason: "credentials present but no identity file")
+            }
+            let service = usesScopedKeychain
+                ? ClaudeAuthStore.scopedKeychainServiceName(
+                    forConfigDirLiteral: configDir, environment: environment
+                )
+                : ClaudeAuthStore.baseKeychainServiceName(environment: environment)
+            return keychain.genericPasswordExists(service: service) == false
+                ? .absent
+                : .unresolved(reason: "keychain credentials present or unverifiable without an identity file")
         }
         guard let parsed = try? JSONDecoder().decode(ClaudeStateFile.self, from: Data(text.utf8)),
               let account = parsed.oauthAccount,

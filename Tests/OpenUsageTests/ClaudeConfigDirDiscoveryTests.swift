@@ -160,4 +160,39 @@ final class ClaudeConfigDirDiscoveryTests: XCTestCase {
             XCTAssertTrue(malformed.run().truncated)
         }
     }
+
+    func testKeychainMetadataProbeNeverReadsSecretsAndQuarantinesUnknownOwnership() {
+        let path = "/Users/dev/.claude-work"
+        for existence in [Optional(true), nil] {
+            let keychain = MetadataProbeKeychain(existence: existence)
+            let discovery = ClaudeConfigDirDiscovery(
+                environment: FakeEnvironment(),
+                files: FakeFiles([path + "/.claude.json":
+                    #"{"oauthAccount":{"accountUuid":"work"}}"#]),
+                keychain: keychain, homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+                listSubdirectories: { directory in
+                    directory.path == "/Users/dev" ? [URL(fileURLWithPath: path)] : []
+                }
+            )
+
+            let result = discovery.run()
+
+            XCTAssertEqual(result.truncated, existence == nil)
+            XCTAssertEqual(result.findings.count, existence == true ? 1 : 0)
+            XCTAssertEqual(keychain.secretReads, 0)
+        }
+    }
+}
+
+private final class MetadataProbeKeychain: KeychainAccessing, @unchecked Sendable {
+    let existence: Bool?
+    private(set) var secretReads = 0
+
+    init(existence: Bool?) { self.existence = existence }
+    func genericPasswordExists(service: String) -> Bool? { existence }
+    func readGenericPassword(service: String) throws -> String? {
+        secretReads += 1
+        return "this secret must never be read"
+    }
+    func writeGenericPassword(service: String, value: String) throws {}
 }

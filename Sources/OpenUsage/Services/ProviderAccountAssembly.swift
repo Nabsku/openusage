@@ -144,6 +144,9 @@ struct ProviderAccountAssembly {
             record.sources.first { $0.kind == .configDir }?.anchor.map { (record.identityKey, $0) }
         })
         let claudeOutcome = outcomes.first { $0.family == "claude" }?.outcome
+        if case .unresolved = claudeOutcome {
+            isClaudeDiscoveryComplete = false
+        }
         if let claudeDiscovery, let claudeOutcome {
             if case .unresolved = claudeOutcome {
                 AppLog.info(.config, "discovery: claude default login present but its identity is unreadable → skipping extra-account candidates this launch")
@@ -203,31 +206,36 @@ struct ProviderAccountAssembly {
         let defaultClaudeRecord: ProviderAccountRecord?
         switch claudeOutcome {
         case .resolved:
-            defaultClaudeRecord = badgeHolder?.identityKey == identityKeys["claude"] ? badgeHolder : nil
+            defaultClaudeRecord = identityKeys["claude"].flatMap { observed in
+                badgeHolder?.matches(identityKey: observed) == true ? badgeHolder : nil
+            }
         case .unresolved:
             defaultClaudeRecord = badgeHolder
         case .absent, .none:
             defaultClaudeRecord = nil
         }
         if let defaultClaudeRecord {
+            let observedDefaultIdentity = identityKeys["claude"]
             if defaultClaudeRecord.id != "claude" {
                 identityKeys.removeValue(forKey: "claude")
             }
-            identityKeys[defaultClaudeRecord.id] = defaultClaudeRecord.identityKey
+            identityKeys[defaultClaudeRecord.id] = observedDefaultIdentity ?? defaultClaudeRecord.identityKey
         }
 
         // The extra-card build plan: one card per distinct account found this launch, under its
         // reconciled record id.
         var claudeCards: [ClaudeAccountCard] = []
         for account in foundClaudeAccounts {
-            guard let record = records.first(where: { $0.family == "claude" && $0.identityKey == account.identityKey }) else {
+            guard let record = records.first(where: {
+                $0.family == "claude" && $0.matches(identityKey: account.identityKey)
+            }) else {
                 continue
             }
             guard let primary = account.dirs.first else { continue }
             claudeCards.append(ClaudeAccountCard(
                 id: record.id,
                 displayName: record.derivedDisplayName,
-                identityKey: record.identityKey,
+                identityKey: account.identityKey,
                 configDirPath: primary.anchorPath,
                 keychainLiteral: primary.keychainLiteral,
                 extraLogRoots: account.dirs.dropFirst().map { URL(fileURLWithPath: $0.anchorPath) }

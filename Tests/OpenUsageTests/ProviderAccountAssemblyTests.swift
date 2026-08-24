@@ -192,7 +192,33 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             assembly.claudeCards.isEmpty,
             "with a nameless default login, an accepted candidate could be that very account — skip"
         )
+        XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        let runtime = ProviderCatalog.make(
+            isClaudeDiscoveryComplete: assembly.isClaudeDiscoveryComplete
+        ).first as? ClaudeProvider
+        XCTAssertEqual(runtime?.authStore.allowsDesktopFallback, false)
         XCTAssertTrue(store.records.isEmpty)
+    }
+
+    func testCanonicalAccountAliasRetainsTheSameCardWithObservedCredentialOwnership() throws {
+        let defaults = makeScratchDefaults()
+        let existing = ProviderAccountRecord(
+            id: "claude", family: "claude", identityKey: "acct-1|org-1",
+            identityAliases: ["acct-1"], label: "Work",
+            sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+        )
+        defaults.set(try JSONEncoder().encode([existing]), forKey: ProviderAccountsStore.storageKey)
+        let store = ProviderAccountsStore(defaults: defaults)
+        let observer = DefaultAccountObserver(
+            files: FakeFiles(["/Users/dev/.claude.json":
+                #"{"oauthAccount":{"accountUuid":"ACCT-1"}}"#]),
+            keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+
+        let assembly = ProviderAccountAssembly.make(observer: observer, accountsStore: store)
+
+        XCTAssertEqual(store.records.map(\.id), ["claude"])
+        XCTAssertEqual(assembly.identityKeysByCard["claude"], "acct-1")
     }
 
     func testNoDefaultLoginStillAcceptsAConfigDirOnlyAccount() throws {

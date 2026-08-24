@@ -94,6 +94,12 @@ struct ProviderAccountRecord: Codable, Equatable, Sendable {
     /// Set by a future "Remove Account…". A tombstoned account is never resurrected by rescans.
     var removedTombstone: Bool = false
 
+    func matches(identityKey observed: String) -> Bool {
+        ([identityKey] + (identityAliases ?? [])).contains {
+            $0.caseInsensitiveCompare(observed) == .orderedSame
+        }
+    }
+
     /// The name a card carries without a rename: the stock family name for the bare card, a
     /// "Claude — <org or email>" derived from the account label for an extra card, or the record id
     /// itself when the account has no label (owner decision 2: short-hash fallback, one rename away
@@ -186,8 +192,9 @@ final class ProviderAccountsStore {
 
         for observation in observations {
             let index = updated.firstIndex {
-                $0.family == observation.family && $0.identityKey == observation.identityKey
+                $0.family == observation.family && $0.matches(identityKey: observation.identityKey)
             }
+            let observedRecordID: String
             if let index {
                 guard !updated[index].removedTombstone else { continue }
                 var record = updated[index]
@@ -197,14 +204,17 @@ final class ProviderAccountsStore {
                     updated[index] = record
                     changed = true
                 }
+                observedRecordID = record.id
             } else {
-                updated.append(ProviderAccountRecord(
+                let record = ProviderAccountRecord(
                     id: Self.availableID(for: observation, in: updated),
                     family: observation.family,
                     identityKey: observation.identityKey,
                     label: observation.label,
                     sources: observation.sources
-                ))
+                )
+                updated.append(record)
+                observedRecordID = record.id
                 changed = true
             }
 
@@ -213,7 +223,7 @@ final class ProviderAccountsStore {
             if observation.sources.contains(where: \.holdsDefaultSource) {
                 for index in updated.indices
                 where updated[index].family == observation.family
-                    && updated[index].identityKey != observation.identityKey
+                    && updated[index].id != observedRecordID
                     && updated[index].sources.contains(where: \.holdsDefaultSource)
                 {
                     updated[index].sources = updated[index].sources.map { source in
