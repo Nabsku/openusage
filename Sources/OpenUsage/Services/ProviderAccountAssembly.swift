@@ -58,9 +58,7 @@ struct ProviderAccountAssembly {
     var isClaudeDiscoveryComplete = true
     /// A first-launch shell delay cannot hide another account when no Claude record exists yet.
     var allowsUnownedClaudeDesktopFallback = false
-    /// Set only when another account's Cowork sandboxes exist: the default card's partition of the
-    /// Cowork walk (that account's sessions must not bleed into the default card's spend). `nil`
-    /// keeps the scanner's built-in walk byte-identical.
+    /// The default card's ownership-verified Cowork roots; `nil` only when no Cowork scan ran.
     var defaultClaudeCoworkRoots: [URL]?
     var defaultClaudeDesktopAccess: ClaudeDesktopAccessPolicy = .activeOrganization
 
@@ -383,8 +381,8 @@ struct ProviderAccountAssembly {
                     logRoots: roots
                 ))
             }
+            defaultClaudeCoworkRoots = defaultBucket
             if !order.isEmpty || quarantinedUnidentifiedSandbox {
-                defaultClaudeCoworkRoots = defaultBucket
                 AppLog.info(.config, "discovery: cowork partition — default keeps \(defaultBucket.count) sandbox dir(s), \(order.count) other account(s) found")
             }
         }

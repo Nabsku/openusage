@@ -534,11 +534,15 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(provider.authStore.verifiedIdentityAliases, card.verifiedIdentityAliases)
     }
 
-    func testDefaultAccountSandboxesLeaveTheBuiltInCoworkWalkUntouched() {
+    func testDefaultAccountSandboxesUseOnlyOwnershipVerifiedCoworkRoots() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         let sandbox = "\(coworkBase)/local_1/.claude"
+        let rejected = "\(coworkBase)/local_symlink/.claude"
         let cowork = makeCoworkDiscovery(
-            files: [sandbox + "/.claude.json": #"{"oauthAccount": {"accountUuid": "ACCT-1"}}"#],
+            files: [
+                sandbox + "/.claude.json": #"{"oauthAccount": {"accountUuid": "ACCT-1"}}"#,
+                rejected + "/.claude.json": #"{"oauthAccount": {"accountUuid": "FOREIGN"}}"#,
+            ],
             sandboxes: [sandbox]
         )
 
@@ -547,7 +551,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
 
         XCTAssertTrue(assembly.claudeCards.isEmpty)
-        XCTAssertNil(assembly.defaultClaudeCoworkRoots, "no partition — the scanner's built-in walk stays byte-identical")
+        XCTAssertEqual(assembly.defaultClaudeCoworkRoots?.map(\.path), [sandbox])
     }
 
     func testNamelessSandboxStaysOnTheOnlyVerifiedDefaultAccount() {
@@ -561,7 +565,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         XCTAssertTrue(assembly.isClaudeDiscoveryComplete)
         XCTAssertTrue(assembly.claudeCards.isEmpty)
-        XCTAssertNil(assembly.defaultClaudeCoworkRoots)
+        XCTAssertEqual(assembly.defaultClaudeCoworkRoots?.map(\.path), [sandbox])
     }
 
     func testIncompleteCoworkWalkCannotCreateCardsOrMisattributeSpend() {
