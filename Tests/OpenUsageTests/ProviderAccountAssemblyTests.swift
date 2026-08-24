@@ -78,6 +78,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(assembly.identityKeysByCard, ["codex": "codex-1"])
         XCTAssertNil(store.defaultBadgeHolder(family: "claude"), "an out-of-pass family must not be reconciled")
         XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .activeOrganization)
+        XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
         let unavailable = ProviderAccountAssembly.make(observer: observer, accountsStore: store, families: [])
         XCTAssertFalse(unavailable.isClaudeDiscoveryComplete)
         XCTAssertTrue(unavailable.allowsUnownedClaudeDesktopFallback)
@@ -85,7 +87,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             isClaudeDiscoveryComplete: unavailable.isClaudeDiscoveryComplete,
             allowsUnownedClaudeDesktopFallback: unavailable.allowsUnownedClaudeDesktopFallback
         ).first as? ClaudeProvider
-        XCTAssertEqual(runtime?.authStore.allowsDesktopFallback, true)
+        XCTAssertEqual(runtime?.authStore.desktopAccessPolicy, .activeOrganization)
 
         for account in ["original-account", "swapped-account"] {
             store.reconcile(with: [.init(
@@ -107,7 +109,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
                 allowsUnownedClaudeDesktopFallback: skipped.allowsUnownedClaudeDesktopFallback
             ).first as? ClaudeProvider
             XCTAssertEqual(bound?.authStore.expectedIdentityKey, "swapped-account")
-            XCTAssertEqual(bound?.authStore.allowsDesktopFallback, false)
+            XCTAssertEqual(bound?.authStore.desktopAccessPolicy, .denied)
         }
     }
 
@@ -229,7 +231,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         let runtime = ProviderCatalog.make(
             isClaudeDiscoveryComplete: assembly.isClaudeDiscoveryComplete
         ).first as? ClaudeProvider
-        XCTAssertEqual(runtime?.authStore.allowsDesktopFallback, false)
+        XCTAssertEqual(runtime?.authStore.desktopAccessPolicy, .denied)
         XCTAssertTrue(store.records.isEmpty)
     }
 
