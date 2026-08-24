@@ -388,16 +388,24 @@ final class AppContainer {
         func observeDefaults() async -> [String: DefaultAccountObserver.Outcome] {
             await loadOffMainActor {
                 let observer = DefaultAccountObserver()
-                return ["claude": observer.observeClaude(), "codex": observer.observeCodex()]
+                let desktop = ClaudeDesktopAuthStore().lastKnownAccountUUID().map {
+                    DefaultAccountObserver.Outcome.resolved(identityKey: $0, label: nil, anchor: "desktop")
+                } ?? .absent
+                return ["claude": observer.observeClaude(), "codex": observer.observeCodex(), "claude-desktop": desktop]
             }
         }
 
         return Task { @MainActor in
-            let shellReady = await loadOffMainActor { LoginShellEnvironment.shared.ensureCaptured() }
-            guard !Task.isCancelled else { return }
-            guard shellReady || ShellEnvironmentSnapshotStore.launchSnapshot != nil else {
-                AppLog.error(.config, "accounts: login shell unavailable; retaining quarantined startup graph")
-                return
+            while !Task.isCancelled {
+                let shellReady = await loadOffMainActor { LoginShellEnvironment.shared.ensureCaptured() }
+                guard !Task.isCancelled else { return }
+                if shellReady || ShellEnvironmentSnapshotStore.launchSnapshot != nil { break }
+                AppLog.error(.config, "accounts: login shell unavailable; retrying quarantined account discovery")
+                do {
+                    try await Task.sleep(for: .seconds(5))
+                } catch {
+                    return
+                }
             }
             var previousDefaults: [String: DefaultAccountObserver.Outcome] = [:]
             var previousOwnership = AccountOwnershipFingerprint(initialAssembly)

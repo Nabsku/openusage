@@ -91,7 +91,7 @@ final class LoginShellEnvironment: @unchecked Sendable {
         if let env = cachedSnapshot() { return env }
         let captured = capture()
         stateLock.lock()
-        cached = captured
+        cached = captured.isEmpty ? nil : captured
         stateLock.unlock()
         return captured
     }

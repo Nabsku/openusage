@@ -53,21 +53,42 @@ final class LoginShellEnvironmentTests: XCTestCase {
         XCTAssertNil(env.value(for: "K"))
         XCTAssertEqual(runner.callCount, 0)
     }
+
+    func testFailedCaptureCanRecoverOnTheNextAttempt() {
+        let runner = RecordingRunner(outputs: [
+            "malformed shell output",
+            [begin, "PATH=/usr/bin", end].joined(separator: "\0")
+        ])
+        let env = LoginShellEnvironment(runner: runner)
+        let recovered = expectation(description: "failed shell capture recovered")
+        DispatchQueue.global().async {
+            XCTAssertFalse(env.ensureCaptured())
+            XCTAssertTrue(env.ensureCaptured())
+            recovered.fulfill()
+        }
+        wait(for: [recovered], timeout: 5)
+        XCTAssertEqual(runner.callCount, 2)
+        XCTAssertEqual(env.value(for: "PATH"), "/usr/bin")
+    }
 }
 
 /// Returns a fixed stdout and counts how many times it was invoked, so tests can assert the capture
 /// ran exactly once (or not at all on the main thread).
 private final class RecordingRunner: ProcessRunning, @unchecked Sendable {
-    let stdout: String
+    let outputs: [String]
     private let lock = NSLock()
     private var count = 0
 
     var callCount: Int { lock.lock(); defer { lock.unlock() }; return count }
 
-    init(stdout: String) { self.stdout = stdout }
+    init(stdout: String) { self.outputs = [stdout] }
+    init(outputs: [String]) { self.outputs = outputs }
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval) throws -> ProcessResult {
-        lock.lock(); count += 1; lock.unlock()
-        return ProcessResult(exitCode: 0, stdout: stdout, stderr: "")
+        lock.lock()
+        let index = count
+        count += 1
+        lock.unlock()
+        return ProcessResult(exitCode: 0, stdout: outputs[min(index, outputs.count - 1)], stderr: "")
     }
 }
