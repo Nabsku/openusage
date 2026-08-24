@@ -1,10 +1,30 @@
 import Foundation
 import Network
 
+/// The listener boundary keeps asynchronous port-release races testable without binding a real port.
+@MainActor
+protocol LocalUsageListening: AnyObject {
+    func setStateHandler(_ handler: (@Sendable (NWListener.State) -> Void)?)
+    func setConnectionHandler(_ handler: (@Sendable (NWConnection) -> Void)?)
+    func start(queue: DispatchQueue)
+    func cancel()
+}
+
+@MainActor
+private final class NetworkLocalUsageListener: LocalUsageListening {
+    private let listener: NWListener
+
+    init(parameters: NWParameters) throws { listener = try NWListener(using: parameters) }
+    func setStateHandler(_ handler: (@Sendable (NWListener.State) -> Void)?) { listener.stateUpdateHandler = handler }
+    func setConnectionHandler(_ handler: (@Sendable (NWConnection) -> Void)?) { listener.newConnectionHandler = handler }
+    func start(queue: DispatchQueue) { listener.start(queue: queue) }
+    func cancel() { listener.cancel() }
+}
+
 /// Loopback-only HTTP/1.1 listener for the read-only usage API on `127.0.0.1:6736`. Starts with
-/// the app; when the port is already taken the feature is silently disabled for the session
-/// (matching the original app). At most 16 requests are served concurrently — beyond that a
-/// connection gets `503 {"error":"server_busy"}` immediately.
+/// the app; account graph replacement waits for the old listener's completed cancellation before
+/// binding its successor. At most 16 requests are served concurrently — beyond that a connection gets
+/// `503 {"error":"server_busy"}` immediately.
 @MainActor
 final class LocalUsageServer {
     static let port: UInt16 = 6736
@@ -12,61 +32,131 @@ final class LocalUsageServer {
     private static let headLimit = 8192
 
     private let state: @MainActor () -> LocalUsageAPI.State
+    private let makeListener: @MainActor (NWParameters) throws -> any LocalUsageListening
     private let queue = DispatchQueue(label: "openusage.local-api")
-    private var listener: NWListener?
+    private var listener: (any LocalUsageListening)?
+    private var listenerGeneration: UUID?
+    private var cancellationContinuation: CheckedContinuation<Void, Never>?
+    private var shouldRun = false
     private var activeConnections = 0
 
-    init(state: @escaping @MainActor () -> LocalUsageAPI.State) {
+    init(
+        state: @escaping @MainActor () -> LocalUsageAPI.State,
+        makeListener: (@MainActor (NWParameters) throws -> any LocalUsageListening)? = nil
+    ) {
         self.state = state
+        self.makeListener = makeListener ?? { try NetworkLocalUsageListener(parameters: $0) }
     }
 
     func start() {
+        guard !shouldRun else { return }
+        shouldRun = true
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: "127.0.0.1",
             port: NWEndpoint.Port(rawValue: Self.port)!
         )
 
-        let listener: NWListener
+        let listener: any LocalUsageListening
         do {
-            listener = try NWListener(using: parameters)
+            listener = try makeListener(parameters)
         } catch {
+            shouldRun = false
             AppLog.info(.localAPI, "disabled: \(error.localizedDescription)")
             return
         }
 
-        listener.stateUpdateHandler = { state in
-            if case .failed(let error) = state {
-                // Most commonly the port is already in use — silently disable for this session.
-                AppLog.info(.localAPI, "disabled: \(error.localizedDescription)")
-            }
-        }
-        listener.newConnectionHandler = { connection in
+        let generation = UUID()
+        listenerGeneration = generation
+        listener.setStateHandler { [weak self] state in
             Task { @MainActor [weak self] in
-                self?.accept(connection)
+                guard let self,
+                      self.shouldRun,
+                      self.listenerGeneration == generation
+                else { return }
+                if case .failed(let error) = state {
+                    self.disableListener(error)
+                }
             }
         }
-        listener.start(queue: queue)
+        listener.setConnectionHandler { [weak self] connection in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.shouldRun,
+                      self.listenerGeneration == generation
+                else {
+                    connection.cancel()
+                    return
+                }
+                self.accept(connection, generation: generation)
+            }
+        }
         self.listener = listener
+        listener.start(queue: queue)
     }
 
-    private func accept(_ connection: NWConnection) {
+    private func disableListener(_ error: Error) {
+        shouldRun = false
+        listenerGeneration = nil
+        listener?.setConnectionHandler(nil)
+        listener?.setStateHandler(nil)
+        listener?.cancel()
+        listener = nil
+        AppLog.info(.localAPI, "disabled: \(error.localizedDescription)")
+    }
+
+    /// Network cancellation is asynchronous. Keep its state handler installed until `.cancelled`
+    /// confirms the socket was released, then let the replacement account graph bind the same port.
+    func stop() async {
+        shouldRun = false
+        listenerGeneration = nil
+        guard let listener else { return }
+        listener.setConnectionHandler(nil)
+        await withCheckedContinuation { continuation in
+            cancellationContinuation = continuation
+            listener.setStateHandler { [weak self] state in
+                guard case .cancelled = state else { return }
+                Task { @MainActor [weak self] in
+                    self?.finishListenerCancellation()
+                }
+            }
+            listener.cancel()
+        }
+    }
+
+    private func finishListenerCancellation() {
+        listener?.setStateHandler(nil)
+        listener = nil
+        let continuation = cancellationContinuation
+        cancellationContinuation = nil
+        continuation?.resume()
+    }
+
+    private func accept(_ connection: NWConnection, generation: UUID) {
         connection.start(queue: queue)
         guard activeConnections < Self.maxConcurrentConnections else {
             Self.send(LocalUsageAPI.busy, over: connection)
             return
         }
         activeConnections += 1
-        receiveHead(connection, buffered: Data())
+        receiveHead(connection, buffered: Data(), generation: generation)
     }
 
     /// Reads until the end of the request head (`\r\n\r\n`). GET/OPTIONS bodies are irrelevant,
     /// so the head is all the router needs.
-    private func receiveHead(_ connection: NWConnection, buffered: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: Self.headLimit) { data, _, isComplete, error in
+    private func receiveHead(_ connection: NWConnection, buffered: Data, generation: UUID) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: Self.headLimit) { [weak self] data, _, isComplete, error in
             Task { @MainActor [weak self] in
                 guard let self else {
                     connection.cancel()
+                    return
+                }
+                guard Self.canServeConnection(
+                    isRunning: self.shouldRun,
+                    listenerGeneration: self.listenerGeneration,
+                    connectionGeneration: generation
+                ) else {
+                    self.finish(connection, with: nil)
                     return
                 }
                 var buffered = buffered
@@ -79,10 +169,20 @@ final class LocalUsageServer {
                 } else if error != nil || isComplete || buffered.count >= Self.headLimit {
                     self.finish(connection, with: nil)
                 } else {
-                    self.receiveHead(connection, buffered: buffered)
+                    self.receiveHead(connection, buffered: buffered, generation: generation)
                 }
             }
         }
+    }
+
+    /// Accepted sockets can outlive their listener during account-graph replacement. Their original
+    /// generation must still own the live listener before any old account state can be routed.
+    nonisolated static func canServeConnection(
+        isRunning: Bool,
+        listenerGeneration: UUID?,
+        connectionGeneration: UUID
+    ) -> Bool {
+        isRunning && listenerGeneration == connectionGeneration
     }
 
     private func route(head: String) -> LocalUsageAPI.Response {

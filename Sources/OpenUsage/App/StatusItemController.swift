@@ -107,7 +107,8 @@ final class StatusItemController: NSObject {
                 self?.panel.appearance = AppearanceSetting.current.nsAppearance
             }
         }
-        // Registered once here; the controller lives for the app's whole life.
+        // Each account graph owns one controller; shutdown removes this handler before its
+        // replacement registers another, without clearing the user's configured shortcut.
         KeyboardShortcuts.onKeyUp(for: .togglePopover) { [weak self] in
             AppLog.info(.statusItem, "Global shortcut fired; toggling popover")
             self?.togglePopover()
@@ -299,6 +300,28 @@ final class StatusItemController: NSObject {
             return
         }
         showPanel()
+    }
+
+    var isPopoverVisible: Bool { panel.isVisible }
+
+    /// Account ownership can change while the app remains open. Remove the old status item and
+    /// observers before installing the graph's replacement, otherwise both controllers stay visible.
+    func shutdown() {
+        // onKeyUp appends listeners globally, so leaving this installed would make every account
+        // graph reload add another popover toggle. Removing a handler preserves the saved shortcut.
+        KeyboardShortcuts.removeHandler(for: .togglePopover)
+        if panel.isVisible {
+            hidePanel()
+        } else {
+            outsideClickMonitor.stop()
+            panel.orderOut(nil)
+        }
+        if let appearanceObserver {
+            NotificationCenter.default.removeObserver(appearanceObserver)
+            self.appearanceObserver = nil
+        }
+        statusItem.button?.target = nil
+        NSStatusBar.system.removeStatusItem(statusItem)
     }
 
     private func showPanel() {

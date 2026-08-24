@@ -5,6 +5,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var container: AppContainer?
     private var statusItemController: StatusItemController?
     private var singleInstanceLock: SingleInstanceLock.Token?
+    private var accountGraphObserver: NSObjectProtocol?
+    private var isReloadingAccountGraph = false
     private let updater = UpdaterController()
 
     public override init() {
@@ -71,8 +73,46 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let container = AppContainer(isFreshInstall: isFreshInstall)
         self.container = container
         statusItemController = StatusItemController(container: container, updater: updater)
+        observeAccountGraphChanges()
         // Starts background update checks (release build only; dormant under preview/`swift run`).
         updater.start()
+    }
+
+    private func observeAccountGraphChanges() {
+        guard accountGraphObserver == nil else { return }
+        accountGraphObserver = NotificationCenter.default.addObserver(
+            forName: AppContainer.accountGraphDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                _ = Task<Void, Never> { [weak self] in
+                    await self?.reloadAccountGraph()
+                }
+            }
+        }
+    }
+
+    private func reloadAccountGraph() async {
+        guard !isReloadingAccountGraph, let previous = container else { return }
+        isReloadingAccountGraph = true
+        defer { isReloadingAccountGraph = false }
+
+        let wasVisible = statusItemController?.isPopoverVisible == true
+        let previousScreen = previous.layout.screen
+        statusItemController?.shutdown()
+        statusItemController = nil
+        await previous.shutdownForAccountGraphReload()
+
+        let replacement = AppContainer()
+        replacement.layout.screen = previousScreen
+        container = replacement
+        let replacementController = StatusItemController(container: replacement, updater: updater)
+        statusItemController = replacementController
+        if wasVisible {
+            replacementController.showPopover()
+        }
+        AppLog.info(.config, "account graph rebuilt after a Claude login changed")
     }
 
     /// Flush queued telemetry on quit. The SDK's lifecycle autocapture is off (we emit our own daily
