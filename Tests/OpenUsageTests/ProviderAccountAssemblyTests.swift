@@ -80,10 +80,12 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
         let unavailable = ProviderAccountAssembly.make(observer: observer, accountsStore: store, families: [])
         XCTAssertFalse(unavailable.isClaudeDiscoveryComplete)
+        XCTAssertTrue(unavailable.allowsUnownedClaudeDesktopFallback)
         let runtime = ProviderCatalog.make(
-            isClaudeDiscoveryComplete: unavailable.isClaudeDiscoveryComplete
+            isClaudeDiscoveryComplete: unavailable.isClaudeDiscoveryComplete,
+            allowsUnownedClaudeDesktopFallback: unavailable.allowsUnownedClaudeDesktopFallback
         ).first as? ClaudeProvider
-        XCTAssertEqual(runtime?.authStore.allowsDesktopFallback, false)
+        XCTAssertEqual(runtime?.authStore.allowsDesktopFallback, true)
 
         for account in ["original-account", "swapped-account"] {
             store.reconcile(with: [.init(
@@ -97,12 +99,15 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             )
             XCTAssertNotEqual(skipped.defaultClaudeCardID, "claude")
             XCTAssertEqual(skipped.identityKeysByCard[skipped.defaultClaudeCardID], "swapped-account")
+            XCTAssertFalse(skipped.allowsUnownedClaudeDesktopFallback)
             let bound = ProviderCatalog.make(
                 defaultClaudeCardID: skipped.defaultClaudeCardID,
                 claudeIdentityKeys: skipped.identityKeysByCard,
-                isClaudeDiscoveryComplete: skipped.isClaudeDiscoveryComplete
+                isClaudeDiscoveryComplete: skipped.isClaudeDiscoveryComplete,
+                allowsUnownedClaudeDesktopFallback: skipped.allowsUnownedClaudeDesktopFallback
             ).first as? ClaudeProvider
             XCTAssertEqual(bound?.authStore.expectedIdentityKey, "swapped-account")
+            XCTAssertEqual(bound?.authStore.allowsDesktopFallback, false)
         }
     }
 
@@ -504,6 +509,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
                        .configDir(path: path, keychainLiteral: path))
         XCTAssertEqual(runtimes.last?.provider.id, assembly.defaultClaudeCardID)
         XCTAssertEqual(runtimes.last?.authStore.scope, .standard)
+        XCTAssertEqual(runtimes.last?.allowsUnattributedPiUsage, false)
+        XCTAssertEqual((ProviderCatalog.make().first as? ClaudeProvider)?.allowsUnattributedPiUsage, true)
 
         let temporarilyUnreadable = DefaultAccountObserver(
             environment: FakeEnvironment(),

@@ -45,6 +45,8 @@ struct ProviderAccountAssembly {
     var defaultClaudeCardID = "claude"
     /// An incomplete scan cannot prove that an unpinned Desktop login belongs to the default card.
     var isClaudeDiscoveryComplete = true
+    /// A first-launch shell delay cannot hide another account when no Claude record exists yet.
+    var allowsUnownedClaudeDesktopFallback = false
 
     /// `waitsForLoginShell`: true for the menu-bar app (a Finder/Dock launch inherits no shell
     /// exports, so the pass leans on the login-shell layers), false for the one-shot CLI (a terminal
@@ -291,7 +293,9 @@ struct ProviderAccountAssembly {
             defaultClaudeDisplayName: defaultClaudeName,
             defaultClaudeVerifiedIdentityAliases: Set(observedDefaultIdentity.map { [$0] } ?? []),
             defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude",
-            isClaudeDiscoveryComplete: isClaudeDiscoveryComplete
+            isClaudeDiscoveryComplete: isClaudeDiscoveryComplete,
+            allowsUnownedClaudeDesktopFallback:
+                !families.contains("claude") && !records.contains { $0.family == "claude" }
         )
     }
 }

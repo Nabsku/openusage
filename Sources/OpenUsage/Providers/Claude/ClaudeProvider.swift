@@ -19,6 +19,8 @@ final class ClaudeProvider: ProviderRuntime {
     let authStore: ClaudeAuthStore
     let usageClient: ClaudeUsageClient
     let logUsageScanner: ClaudeLogUsageScanner
+    /// Pi logs name Claude but not an account, so multiple accounts make them unsafe to attribute.
+    let allowsUnattributedPiUsage: Bool
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
 
@@ -36,6 +38,7 @@ final class ClaudeProvider: ProviderRuntime {
         authStore: ClaudeAuthStore = ClaudeAuthStore(),
         usageClient: ClaudeUsageClient = ClaudeUsageClient(),
         logUsageScanner: ClaudeLogUsageScanner = ClaudeLogUsageScanner(),
+        allowsUnattributedPiUsage: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init,
         pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() }
     ) {
@@ -43,6 +46,7 @@ final class ClaudeProvider: ProviderRuntime {
         self.authStore = authStore
         self.usageClient = usageClient
         self.logUsageScanner = logUsageScanner
+        self.allowsUnattributedPiUsage = allowsUnattributedPiUsage
         self.now = now
         self.pricing = pricing
     }
@@ -294,7 +298,7 @@ final class ClaudeProvider: ProviderRuntime {
         let pricing = await pricing()
         let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
         let piScan: LogUsageScan?
-        if authStore.scope == .standard {
+        if authStore.scope == .standard && allowsUnattributedPiUsage {
             piScan = await PiUsageScanner.shared.scan(cardID: "claude", now: now(), pricing: pricing)
         } else {
             piScan = nil

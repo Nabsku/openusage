@@ -17,7 +17,8 @@ enum ProviderCatalog {
         defaultClaudeVerifiedIdentityAliases: Set<String> = [],
         defaultClaudeCardID: String = "claude",
         claudeIdentityKeys: [String: String] = [:],
-        isClaudeDiscoveryComplete: Bool = true
+        isClaudeDiscoveryComplete: Bool = true,
+        allowsUnownedClaudeDesktopFallback: Bool = false
     ) -> [ProviderRuntime] {
         // Default provider order (see AGENTS.md "## Providers"): the three established providers first,
         // then every other provider alphabetically by display name. Account cards slot in right after
@@ -37,11 +38,13 @@ enum ProviderCatalog {
                 // belongs to one of them — fetching that account's usage onto the default card. Desktop
                 // returns as its own properly-pinned source kind in Phase 3.
                 authStore: ClaudeAuthStore(
-                    allowsDesktopFallback: claudeCards.isEmpty && isClaudeDiscoveryComplete,
+                    allowsDesktopFallback: claudeCards.isEmpty
+                        && (isClaudeDiscoveryComplete || allowsUnownedClaudeDesktopFallback),
                     expectedIdentityKey: claudeIdentityKeys[defaultClaudeCardID],
                     verifiedIdentityAliases: defaultClaudeVerifiedIdentityAliases
                 ),
-                logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots)
+                logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots),
+                allowsUnattributedPiUsage: claudeCards.isEmpty
             ))
         }
         for card in claudeCards {
