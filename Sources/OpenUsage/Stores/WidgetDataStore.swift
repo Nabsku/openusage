@@ -484,8 +484,15 @@ final class WidgetDataStore {
                     if let reporter = providersByID[providerID] as? any AccountIdentityReporting,
                        !reporter.isAccountHistorySafeToExport
                     {
-                        AppLog.warn(.config, "sync: omitting account history with unverified log ownership")
-                        continue
+                        let cachedIdentity = cache.producedByIdentityKey(providerID: providerID)
+                        let retainsVerifiedCache = reporter.verifiedAccountIdentityKey == nil
+                            && providerIdentityKeys[providerID].map {
+                                cachedIdentity?.caseInsensitiveCompare($0) == .orderedSame
+                            } == true
+                        if !retainsVerifiedCache {
+                            AppLog.warn(.config, "sync: omitting account history with unverified log ownership")
+                            continue
+                        }
                     }
                     guard let identity = providerIdentityKeys[providerID] else {
                         AppLog.warn(.config, "sync: omitting unresolved account history for \(providerID)")

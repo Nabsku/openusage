@@ -249,6 +249,28 @@ final class PeerHistoryIdentityTests: XCTestCase {
         }
     }
 
+    func testVerifiedCodexCacheSurvivesInitialCloudWriteBeforeRefresh() {
+        let defaults = makeScratchDefaults("CodexColdCloudWrite")
+        let provider = CodexProvider(expectedIdentityKey: "account-a")
+        let descriptor = WidgetDescriptor.usageTrend(provider: provider.provider)
+            .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test")
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "cold-codex", ttl: 600)
+        cache.store(
+            snapshot(providerID: "codex", history: history(day: "2026-07-16", tokens: 10, cost: 1)),
+            producedByIdentityKey: "account-a"
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider.provider], descriptors: [descriptor]),
+            providers: [provider], cache: cache, defaults: defaults,
+            providerIdentityKeys: ["codex": "account-a"]
+        )
+
+        let document = store.localHistoryDocument(deviceID: "this-mac", deviceName: "This Mac")
+
+        XCTAssertNotNil(document.providers["codex"])
+        XCTAssertEqual(document.identities?["codex"], "account-a")
+    }
+
     func testLocalDocumentPublishesAccountCardsWithIdentities() {
         let registry = makeRegistry()
         // Preload the cache; the store's init adopts cached snapshots as its local set. The entries

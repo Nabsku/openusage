@@ -526,22 +526,26 @@ final class CodexProviderTests: XCTestCase {
             CodexLogFixture.tokenCount(timestamp: "2026-02-20T14:01:00.000Z",
                                       last: CodexLogFixture.usage(input: 10, output: 5)),
         ].joined(separator: "\n")])
-        let files = FakeFiles([
-            "~/.config/codex/auth.json": #"{"tokens":{"access_token":"a","account_id":"account-a"}}"#,
-            logHome.appendingPathComponent("auth.json").path:
-                #"{"tokens":{"access_token":"b","account_id":"account-b"}}"#,
-        ])
-        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8)))
-        let provider = CodexProvider(
-            authStore: CodexAuthStore(files: files, keychain: FakeKeychain()),
-            usageClient: CodexUsageClient(http: http), logUsageScanner: CodexLogFixture.scanner(home: logHome),
-            now: { now }, pricing: { TestPricing.bundled }
-        )
+        for hasForeignCredential in [true, false] {
+            let files = FakeFiles([
+                "~/.config/codex/auth.json": #"{"tokens":{"access_token":"a","account_id":"account-a"}}"#,
+            ])
+            if hasForeignCredential {
+                files.files[logHome.appendingPathComponent("auth.json").path] =
+                    #"{"tokens":{"access_token":"b","account_id":"account-b"}}"#
+            }
+            let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8)))
+            let provider = CodexProvider(
+                authStore: CodexAuthStore(files: files, keychain: FakeKeychain()),
+                usageClient: CodexUsageClient(http: http), logUsageScanner: CodexLogFixture.scanner(home: logHome),
+                now: { now }, pricing: { TestPricing.bundled }
+            )
 
-        let snapshot = await provider.refresh()
-        XCTAssertEqual(provider.verifiedAccountIdentityKey, "account-a")
-        XCTAssertFalse(provider.isAccountHistorySafeToExport)
-        XCTAssertNil(snapshot.usageHistory)
+            let snapshot = await provider.refresh()
+            XCTAssertEqual(provider.verifiedAccountIdentityKey, "account-a")
+            XCTAssertFalse(provider.isAccountHistorySafeToExport)
+            XCTAssertNil(snapshot.usageHistory)
+        }
     }
 
     func testNoUsageDataBadgeIsDroppedWhenLocalLogsHaveSpend() async throws {

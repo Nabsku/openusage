@@ -253,7 +253,11 @@ final class CodexProvider: ProviderRuntime, AccountIdentityReporting {
         guard let identity = state.accountIdentityKey else { return true }
         for home in await logUsageScanner.codexHomes() {
             let authPath = home.appendingPathComponent("auth.json").path
-            guard authStore.files.exists(authPath) else { continue }
+            guard authStore.files.exists(authPath) else {
+                if case .keychain = state.source { continue }
+                AppLog.warn(.config, "codex logs have no credential proving their account; history quarantined")
+                return false
+            }
             guard authStore.loadAuth(at: authPath)?.accountIdentityKey?
                 .caseInsensitiveCompare(identity) == .orderedSame
             else {
