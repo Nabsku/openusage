@@ -21,6 +21,7 @@ struct ClaudeAuthStore: Sendable {
     /// Aliases explicitly verified against this card's selected credential source at launch.
     let verifiedIdentityAliases: Set<String>
     let desktopAccessPolicy: ClaudeDesktopAccessPolicy
+    let allowsUnscopedStandardKeychainFallback: Bool
 
     var standardDesktopOrganization: String? { desktopAccessPolicy.organization }
     var allowsUnpinnedStandardDesktopFallback: Bool { desktopAccessPolicy == .activeOrganization }
@@ -35,6 +36,7 @@ struct ClaudeAuthStore: Sendable {
         verifiedIdentityAliases: Set<String> = [],
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         desktopAccessPolicy: ClaudeDesktopAccessPolicy? = nil,
+        allowsUnscopedStandardKeychainFallback: Bool = true,
         standardDesktopOrganization: String? = nil,
         allowsUnpinnedStandardDesktopFallback: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init
@@ -47,6 +49,7 @@ struct ClaudeAuthStore: Sendable {
         self.scope = scope
         self.expectedIdentityKey = expectedIdentityKey
         self.verifiedIdentityAliases = verifiedIdentityAliases
+        self.allowsUnscopedStandardKeychainFallback = allowsUnscopedStandardKeychainFallback
         if let desktopAccessPolicy {
             self.desktopAccessPolicy = desktopAccessPolicy
         } else if let organization = standardDesktopOrganization?.nilIfEmpty?.lowercased() {
@@ -154,10 +157,14 @@ struct ClaudeAuthStore: Sendable {
               let account = state.oauthAccount,
               let observed = DefaultAccountObserver.claudeIdentityKey(account)
         else { return false }
-        return observed.caseInsensitiveCompare(expectedIdentityKey) == .orderedSame
-            || verifiedIdentityAliases.contains {
-                $0.caseInsensitiveCompare(observed) == .orderedSame
-            }
+        guard let observedIdentity = ClaudeIdentity(observed),
+              let expectedIdentity = ClaudeIdentity(expectedIdentityKey)
+        else { return false }
+        if observedIdentity == expectedIdentity { return true }
+        return observedIdentity.user == expectedIdentity.user
+            && observedIdentity.organization == nil
+            && expectedIdentity.organization != nil
+            && verifiedIdentityAliases.contains { ClaudeIdentity($0) == observedIdentity }
     }
 
     private func applyingEnvironmentToken(to stored: [ClaudeCredentialState]) -> [ClaudeCredentialState] {
@@ -207,7 +214,7 @@ struct ClaudeAuthStore: Sendable {
     /// whole generation catches a newly added higher-priority source as well as replacement in place.
     /// The underlying stores provide no atomic compare-and-swap, so this remains best-effort.
     func save(_ state: ClaudeCredentialState, ifUnchanged expected: ClaudeCredentialGeneration) throws -> Bool {
-        guard credentialGeneration() == expected else { return false }
+        guard belongsToExpectedAccount(), credentialGeneration() == expected else { return false }
         var fullData = state.fullData ?? ClaudeCredentialsFile()
         fullData.claudeAiOauth = state.oauth
         let data = try JSONEncoder().encode(fullData)

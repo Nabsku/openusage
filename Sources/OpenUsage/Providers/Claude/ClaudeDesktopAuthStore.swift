@@ -267,18 +267,15 @@ struct ClaudeDesktopAuthStore: Sendable {
         now: Date
     ) -> Selection {
         let normalizedOrg = activeOrganization.lowercased()
-        let v2Candidates = candidates(in: v2, organization: normalizedOrg, now: now)
-        if let best = v2Candidates.available.max(by: { $0.rank < $1.rank }) {
-            return .available(best.oauth)
-        }
-
+        let v2Candidates = candidates(in: v2, organization: normalizedOrg, now: now, isCurrentGeneration: true)
         let v2Keys = Set(v2?.keys ?? Dictionary<String, Any>().keys)
         let v1Candidates = candidates(
             in: v1?.filter { !v2Keys.contains($0.key) },
             organization: normalizedOrg,
-            now: now
+            now: now,
+            isCurrentGeneration: false
         )
-        if let best = v1Candidates.available.max(by: { $0.rank < $1.rank }) {
+        if let best = (v2Candidates.available + v1Candidates.available).max(by: { $0.rank < $1.rank }) {
             return .available(best.oauth)
         }
         if v2Candidates.sawStale || v1Candidates.sawStale { return .stale }
@@ -294,31 +291,15 @@ struct ClaudeDesktopAuthStore: Sendable {
 
     private struct Candidate {
         var oauth: ClaudeOAuth
-        var clientID: String
-        var scopes: [String]
-        var expiresAt: Double
-
-        /// Selection order mirrors Desktop's own resolution instead of raw expiry: production client
-        /// with full scopes first, then any full-scope entry over bare `user:profile` leftovers, then
-        /// scope richness, with expiry only as the final tiebreak. A stale wrong-tier token with a
-        /// longer TTL must not outrank the current login.
-        var rank: (Int, Int, Int, Double) {
-            let hasFullScope = scopes.contains(ClaudeDesktopAuthStore.usageScope)
-                && scopes.contains(ClaudeDesktopAuthStore.inferenceScope)
-            let isProductionClient = clientID == ClaudeDesktopAuthStore.productionClientID
-            return (
-                isProductionClient && hasFullScope ? 1 : 0,
-                hasFullScope ? 1 : 0,
-                scopes.count,
-                expiresAt
-            )
-        }
+        /// Credential quality outranks cache generation; expiry breaks otherwise identical ties.
+        var rank: (Int, Int, Int, Int, Double)
     }
 
     private static func candidates(
         in cache: [String: Any]?,
         organization: String,
-        now: Date
+        now: Date,
+        isCurrentGeneration: Bool
     ) -> (available: [Candidate], sawStale: Bool, sawInvalid: Bool) {
         guard let cache else { return ([], false, false) }
         var available: [Candidate] = []
@@ -354,11 +335,17 @@ struct ClaudeDesktopAuthStore: Sendable {
                 rateLimitTier: entry["rateLimitTier"] as? String,
                 scopes: parsedKey.scopes
             )
+            let hasFullScope = parsedKey.scopes.contains(inferenceScope)
+            let isProductionClient = parsedKey.clientID == productionClientID
             available.append(Candidate(
                 oauth: oauth,
-                clientID: parsedKey.clientID,
-                scopes: parsedKey.scopes,
-                expiresAt: expiresAt
+                rank: (
+                    isProductionClient && hasFullScope ? 1 : 0,
+                    hasFullScope ? 1 : 0,
+                    parsedKey.scopes.count,
+                    isCurrentGeneration ? 1 : 0,
+                    expiresAt
+                )
             ))
         }
         return (available, sawStale, sawInvalid)

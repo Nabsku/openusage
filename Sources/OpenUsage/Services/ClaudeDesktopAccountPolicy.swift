@@ -29,7 +29,6 @@ struct ClaudeIdentity: Hashable, Sendable {
 /// Every observed and remembered identity contributes to one closed Desktop ownership decision.
 struct ClaudeDesktopAccountPolicy {
     private let identities: Set<ClaudeIdentity>
-    private let persistedOrganizationlessUsers: Set<String>
 
     init(
         records: [ProviderAccountRecord],
@@ -37,8 +36,9 @@ struct ClaudeDesktopAccountPolicy {
         configFindings: [ClaudeConfigDirDiscovery.Finding],
         coworkScan: ClaudeCoworkDiscovery.Result?
     ) {
-        let persisted = records.filter { $0.family == "claude" }.compactMap { ClaudeIdentity($0.identityKey) }
-        persistedOrganizationlessUsers = Set(persisted.filter { $0.organization == nil }.map(\.user))
+        let persisted = records.filter { $0.family == "claude" }.flatMap { record in
+            ([record.identityKey] + (record.identityAliases ?? [])).compactMap(ClaudeIdentity.init)
+        }
         var collected = Set(persisted)
         if case .resolved(let value, _, _)? = defaultOutcome, let identity = ClaudeIdentity(value) {
             collected.insert(identity)
@@ -54,9 +54,6 @@ struct ClaudeDesktopAccountPolicy {
         guard let identity = ClaudeIdentity(value) else { return nil }
         let organizations = Set(identities.compactMap { $0.user == identity.user ? $0.organization : nil })
         if identity.organization == nil, organizations.count > 1 { return nil }
-        if organizations.count == 1, persistedOrganizationlessUsers.contains(identity.user) {
-            return identity.user
-        }
         if identity.organization == nil, let organization = organizations.first {
             return "\(identity.user)|\(organization)"
         }

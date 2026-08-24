@@ -86,6 +86,7 @@ struct ProviderAccountRecord: Codable, Equatable, Sendable {
     var id: String
     var family: String
     var identityKey: String
+    /// Previously verified spellings retained when Claude later reveals its organization.
     var identityAliases: [String]? = nil
     var label: String?
     /// A user-chosen card name (Rename in the card's context menu / Customize). Wins over `label`
@@ -187,18 +188,45 @@ final class ProviderAccountsStore {
     /// — an account that went unobserved (logged out, unreadable identity) is simply left as it was,
     /// except that a newly observed default-home holder takes the default badge off every sibling.
     @discardableResult
-    func reconcile(with observations: [AccountObservation]) -> [ProviderAccountRecord] {
+    func reconcile(
+        with observations: [AccountObservation],
+        clearingDefaultSourcesFor familiesWithoutDefault: Set<String> = []
+    ) -> [ProviderAccountRecord] {
         var updated = records
         var changed = false
 
-        for observation in observations {
-            let index = updated.firstIndex {
-                $0.family == observation.family && $0.matches(identityKey: observation.identityKey)
+        for index in updated.indices where familiesWithoutDefault.contains(updated[index].family) {
+            let sources = updated[index].sources.filter { $0.kind != .defaultHome }.map { source in
+                var source = source
+                source.holdsDefaultSource = false
+                return source
             }
+            if sources != updated[index].sources {
+                updated[index].sources = sources
+                changed = true
+            }
+        }
+
+        for observation in observations {
+            if observation.family == "claude", let identity = ClaudeIdentity(observation.identityKey),
+               identity.organization == nil,
+               Self.organizations(for: identity.user, in: updated, observations: observations).count > 1
+            {
+                AppLog.warn(.config, "accounts: ambiguous Claude identity has multiple organizations; observation quarantined")
+                continue
+            }
+            let index = Self.matchingRecord(for: observation, in: updated, observations: observations)
             let observedRecordID: String
             if let index {
                 guard !updated[index].removedTombstone else { continue }
                 var record = updated[index]
+                if record.identityKey.caseInsensitiveCompare(observation.identityKey) != .orderedSame {
+                    var aliases = Set(record.identityAliases ?? [])
+                    aliases.insert(record.identityKey.lowercased())
+                    aliases.remove(observation.identityKey.lowercased())
+                    record.identityAliases = aliases.sorted()
+                    record.identityKey = observation.identityKey.lowercased()
+                }
                 record.label = observation.label ?? record.label
                 record.sources = observation.sources + record.sources.filter { !$0.kind.isKnown }
                 if record != updated[index] {
@@ -242,6 +270,49 @@ final class ProviderAccountsStore {
             persist()
         }
         return records
+    }
+
+    private static func matchingRecord(
+        for observation: AccountObservation,
+        in records: [ProviderAccountRecord],
+        observations: [AccountObservation]
+    ) -> Int? {
+        if let exact = records.firstIndex(where: {
+            $0.family == observation.family
+                && ($0.identityKey.caseInsensitiveCompare(observation.identityKey) == .orderedSame
+                    || ($0.identityAliases ?? []).contains {
+                        $0.caseInsensitiveCompare(observation.identityKey) == .orderedSame
+                    })
+        }) {
+            return exact
+        }
+        guard observation.family == "claude", let incoming = ClaudeIdentity(observation.identityKey) else {
+            return nil
+        }
+        let organizations = organizations(for: incoming.user, in: records, observations: observations)
+        guard organizations.count == 1 else { return nil }
+        let matches = records.indices.filter { index in
+            guard records[index].family == "claude", let existing = ClaudeIdentity(records[index].identityKey) else {
+                return false
+            }
+            return existing.user == incoming.user
+                && (existing.organization == nil || incoming.organization == nil
+                    || existing.organization == incoming.organization)
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func organizations(
+        for user: String,
+        in records: [ProviderAccountRecord],
+        observations: [AccountObservation]
+    ) -> Set<String> {
+        let evidence = records.filter { $0.family == "claude" }.flatMap {
+            [$0.identityKey] + ($0.identityAliases ?? [])
+        } + observations.filter { $0.family == "claude" }.map(\.identityKey)
+        return Set(evidence.compactMap(ClaudeIdentity.init).compactMap {
+            $0.user == user ? $0.organization : nil
+        })
     }
 
     func record(for cardID: String) -> ProviderAccountRecord? {

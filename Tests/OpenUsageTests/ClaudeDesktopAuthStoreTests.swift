@@ -84,6 +84,31 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(oauth.rateLimitTier, "default_claude_max_20x")
     }
 
+    func testFullScopeV1CredentialOutranksProfileOnlyV2Credential() {
+        let selection = ClaudeDesktopAuthStore.selectCredential(
+            activeOrganization: organization,
+            v2: [
+                cacheKey(organization: organization, scopes: "user:profile"):
+                    tokenEntry("stale-5x-token", expiresIn: 86_400, rateLimitTier: "default_claude_max_5x")
+            ],
+            v1: [
+                cacheKey(
+                    organization: organization,
+                    clientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+                    scopes: "user:profile user:inference"
+                ):
+                    tokenEntry("current-20x-token", expiresIn: 1_800, rateLimitTier: "default_claude_max_20x")
+            ],
+            now: now
+        )
+
+        guard case .available(let oauth) = selection else {
+            return XCTFail("expected the full-scope v1 credential")
+        }
+        XCTAssertEqual(oauth.accessToken, "current-20x-token")
+        XCTAssertEqual(oauth.rateLimitTier, "default_claude_max_20x")
+    }
+
     func testFullScopeEntryOutranksProfileOnlyEntryForNonProductionClients() throws {
         let selection = ClaudeDesktopAuthStore.selectCredential(
             activeOrganization: organization,

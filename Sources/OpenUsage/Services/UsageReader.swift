@@ -65,6 +65,7 @@ public struct UsageReader {
             defaultClaudeVerifiedIdentityAliases: accountAssembly.defaultClaudeVerifiedIdentityAliases,
             defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
             claudeIdentityKeys: accountAssembly.identityKeysByCard,
+            allowsUnboundClaudeFallback: accountAssembly.allowsUnboundClaudeFallback,
             isClaudeDiscoveryComplete: accountAssembly.isClaudeDiscoveryComplete,
             allowsUnownedClaudeDesktopFallback: accountAssembly.allowsUnownedClaudeDesktopFallback,
             defaultClaudeCoworkRoots: accountAssembly.defaultClaudeCoworkRoots,

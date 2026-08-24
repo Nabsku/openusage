@@ -36,19 +36,22 @@ enum ClaudeUsageMapper {
         )
     }
 
-    /// Snapshot shown when the usage endpoint rate-limits us and there is no last-good usage to fall back
-    /// on (e.g. the first fetch after launch): a status badge plus the staleness note, no live bars.
-    static func rateLimitedUsage(credentials: ClaudeOAuth, retryAfterSeconds: Int?) -> ClaudeMappedUsage {
+    /// Keep the last successful usage bars when available, but always derive the plan from current credentials.
+    static func rateLimitedUsage(
+        credentials: ClaudeOAuth,
+        retryAfterSeconds: Int?,
+        lastGoodUsage: ClaudeMappedUsage? = nil
+    ) -> ClaudeMappedUsage {
         let retryText = retryAfterSeconds.map(formatRateLimitMinutes)
         let waitText = retryText.map { "Rate limited, retry in ~\($0)" } ?? "Rate limited, try again later"
-        return ClaudeMappedUsage(
-            plan: formatPlan(subscriptionType: credentials.subscriptionType, rateLimitTier: credentials.rateLimitTier),
-            lines: [
-                .badge(label: "Status", text: waitText, colorHex: "#F59E0B"),
-                rateLimitedNote(retryAfterSeconds: retryAfterSeconds)
-            ],
-            warning: rateLimitedWarning(retryAfterSeconds: retryAfterSeconds)
+        var mapped = lastGoodUsage ?? ClaudeMappedUsage(
+            plan: nil,
+            lines: [.badge(label: "Status", text: waitText, colorHex: "#F59E0B")]
         )
+        mapped.plan = formatPlan(subscriptionType: credentials.subscriptionType, rateLimitTier: credentials.rateLimitTier)
+        mapped.lines.append(rateLimitedNote(retryAfterSeconds: retryAfterSeconds))
+        mapped.warning = rateLimitedWarning(retryAfterSeconds: retryAfterSeconds)
+        return mapped
     }
 
     /// Provider header warning (the amber triangle + tooltip) for the rate-limited state. The badge/note
@@ -201,4 +204,3 @@ private enum HTTPDateFormatter {
         return formatter.date(from: value)
     }
 }
-

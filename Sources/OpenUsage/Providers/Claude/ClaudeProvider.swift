@@ -347,7 +347,11 @@ final class ClaudeProvider: ProviderRuntime {
         // constantly-limited endpoint doesn't blank the dashboard (and we don't pile on more 429s).
         if let until = rateLimitedUntil, now() < until {
             AppLog.info(LogTag.plugin("claude"), "rate-limited (cooldown active, serving \(lastGoodUsage == nil ? "badge" : "last-good usage"))")
-            return rateLimitedSnapshot(credentials: state.oauth, retryAfterSeconds: Int(until.timeIntervalSince(now()).rounded(.up)))
+            return ClaudeUsageMapper.rateLimitedUsage(
+                credentials: state.oauth,
+                retryAfterSeconds: Int(until.timeIntervalSince(now()).rounded(.up)),
+                lastGoodUsage: lastGoodUsage
+            )
         }
 
         if authStore.needsRefresh(state.oauth),
@@ -400,25 +404,16 @@ final class ClaudeProvider: ProviderRuntime {
             let retryAfterSeconds = ClaudeUsageMapper.parseRetryAfterSeconds(response, now: now())
             rateLimitedUntil = now().addingTimeInterval(TimeInterval(retryAfterSeconds ?? Int(Self.rateLimitCooldown)))
             AppLog.info(LogTag.plugin("claude"), "rate-limited (serving \(lastGoodUsage == nil ? "badge" : "last-good usage"))")
-            return rateLimitedSnapshot(credentials: working.oauth, retryAfterSeconds: retryAfterSeconds)
+            return ClaudeUsageMapper.rateLimitedUsage(
+                credentials: working.oauth,
+                retryAfterSeconds: retryAfterSeconds,
+                lastGoodUsage: lastGoodUsage
+            )
         }
 
         let mapped = try ClaudeUsageMapper.mapUsageResponse(response, credentials: working.oauth, now: now())
         lastGoodUsage = mapped
         rateLimitedUntil = nil
-        return mapped
-    }
-
-    /// Last-good usage with an appended staleness note when we have it; otherwise the plain rate-limited
-    /// badge (no successful fetch yet this run). `lastGoodUsage` only ever holds a clean `mapUsageResponse`
-    /// result (never a rate-limited snapshot), so the note is never duplicated and no stale spend tiles
-    /// ride along — `probe` appends those fresh after this returns.
-    private func rateLimitedSnapshot(credentials: ClaudeOAuth, retryAfterSeconds: Int?) -> ClaudeMappedUsage {
-        guard var mapped = lastGoodUsage else {
-            return ClaudeUsageMapper.rateLimitedUsage(credentials: credentials, retryAfterSeconds: retryAfterSeconds)
-        }
-        mapped.lines.append(ClaudeUsageMapper.rateLimitedNote(retryAfterSeconds: retryAfterSeconds))
-        mapped.warning = ClaudeUsageMapper.rateLimitedWarning(retryAfterSeconds: retryAfterSeconds)
         return mapped
     }
 

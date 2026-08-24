@@ -53,6 +53,8 @@ struct ProviderAccountAssembly {
     var defaultClaudeVerifiedIdentityAliases: Set<String> = []
     /// The default runtime follows its account record, even when another account keeps `claude`.
     var defaultClaudeCardID = "claude"
+    /// A generic runtime is safe only before any Claude account has ever been identified.
+    var allowsUnboundClaudeFallback = true
     /// An incomplete scan cannot prove that an unpinned Desktop login belongs to the default card.
     var isClaudeDiscoveryComplete = true
     /// A first-launch shell delay cannot hide another account when no Claude record exists yet.
@@ -177,9 +179,10 @@ struct ProviderAccountAssembly {
         if case .unresolved = claudeOutcome {
             isClaudeDiscoveryComplete = false
         }
+        let hasKnownClaudeAccount = accountsStore.records.contains { $0.family == "claude" }
         var claudeCandidatesAllowed = false
         if let claudeOutcome {
-            if case .unresolved = claudeOutcome {
+            if case .unresolved = claudeOutcome, !hasKnownClaudeAccount {
                 AppLog.info(.config, "discovery: claude default login present but its identity is unreadable → skipping extra-account candidates this launch")
             } else {
                 claudeCandidatesAllowed = true
@@ -367,7 +370,19 @@ struct ProviderAccountAssembly {
         }
 
         let observedDefaultIdentity = identityKeys["claude"]
-        let records = accountsStore.reconcile(with: observations)
+        let familiesWithoutDefault = Set(outcomes.compactMap { entry -> String? in
+            switch entry.outcome {
+            case .absent:
+                entry.family
+            case .unresolved:
+                entry.family == "claude" ? nil : entry.family
+            case .resolved:
+                nil
+            }
+        })
+        let records = accountsStore.reconcile(
+            with: observations, clearingDefaultSourcesFor: familiesWithoutDefault
+        )
         for (family, observedIdentity) in Array(identityKeys) {
             if let record = records.first(where: {
                 $0.family == family && $0.matches(identityKey: observedIdentity)
@@ -439,6 +454,7 @@ struct ProviderAccountAssembly {
             defaultClaudeDisplayName: defaultClaudeName,
             defaultClaudeVerifiedIdentityAliases: Set(observedDefaultIdentity.map { [$0] } ?? []),
             defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude",
+            allowsUnboundClaudeFallback: !records.contains { $0.family == "claude" },
             isClaudeDiscoveryComplete: isClaudeDiscoveryComplete,
             allowsUnownedClaudeDesktopFallback: allowsUnownedDesktop,
             defaultClaudeCoworkRoots: defaultClaudeCoworkRoots,

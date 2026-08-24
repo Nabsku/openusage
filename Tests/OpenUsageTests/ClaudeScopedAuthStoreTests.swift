@@ -53,16 +53,66 @@ final class ClaudeScopedAuthStoreTests: XCTestCase {
             forConfigDirLiteral: literal, environment: environment
         )
         let bare = ClaudeAuthStore.baseKeychainServiceName(environment: environment)
-        let store = ClaudeAuthStore(
-            environment: environment,
-            files: FakeFiles([literal + "/.credentials.json":
-                #"{"claudeAiOauth":{"accessToken":"own-account"}}"#]),
-            keychain: ServiceKeychain(currentUserValues: [bare:
-                #"{"claudeAiOauth":{"accessToken":"another-account"}}"#])
-        )
+        for allowsFallback in [false, true] {
+            let store = ClaudeAuthStore(
+                environment: environment,
+                files: FakeFiles([literal + "/.credentials.json":
+                    #"{"claudeAiOauth":{"accessToken":"own-account"}}"#]),
+                keychain: ServiceKeychain(currentUserValues: [bare:
+                    #"{"claudeAiOauth":{"accessToken":"another-account"}}"#]),
+                desktopAccessPolicy: .pinned("org-work"),
+                allowsUnscopedStandardKeychainFallback: allowsFallback
+            )
 
-        XCTAssertEqual(store.keychainServiceCandidates(), [scoped])
-        XCTAssertEqual(store.loadCredentialCandidates().map(\.oauth.accessToken), ["own-account"])
+            XCTAssertEqual(store.keychainServiceCandidates(), [scoped])
+            XCTAssertEqual(store.loadCredentialCandidates().map(\.oauth.accessToken), ["own-account"])
+        }
+    }
+
+    func testCredentialRotationCannotOverwriteAnotherAccountAfterIdentityChanges() throws {
+        let identityPath = "/Users/dev/.claude-work/.claude.json"
+        let credentialPath = "/Users/dev/.claude-work/.credentials.json"
+        let original = #"{"claudeAiOauth":{"accessToken":"account-a"}}"#
+        let files = FakeFiles([
+            identityPath: #"{"oauthAccount":{"accountUuid":"account-a"}}"#,
+            credentialPath: original,
+        ])
+        let store = ClaudeAuthStore(
+            files: files,
+            keychain: ServiceKeychain(),
+            scope: scope,
+            expectedIdentityKey: "account-a"
+        )
+        var candidate = try XCTUnwrap(store.loadCredentialCandidates().first)
+        let generation = ClaudeCredentialGeneration([candidate])
+        candidate.oauth.accessToken = "rotated-account-a"
+        files.files[identityPath] = #"{"oauthAccount":{"accountUuid":"account-b"}}"#
+
+        XCTAssertFalse(try store.save(candidate, ifUnchanged: generation))
+        XCTAssertEqual(files.files[credentialPath], original)
+    }
+
+    func testOrganizationlessIdentityMatchesOnlyAnExplicitlyPinnedOrganization() {
+        let scenarios: [(organization: String?, policy: ClaudeDesktopAccessPolicy, matches: Bool)] = [
+            (nil, .pinned("org-work"), true),
+            (nil, .activeOrganization, false),
+            ("org-other", .pinned("org-work"), false),
+        ]
+
+        for scenario in scenarios {
+            let identity = scenario.organization.map {
+                #"{"oauthAccount":{"accountUuid":"account-a","organizationUuid":"\#($0)"}}"#
+            } ?? #"{"oauthAccount":{"accountUuid":"account-a"}}"#
+            let store = ClaudeAuthStore(
+                files: FakeFiles(["/Users/dev/.claude-work/.claude.json": identity]),
+                keychain: ServiceKeychain(),
+                scope: scope,
+                expectedIdentityKey: "account-a|org-work",
+                desktopAccessPolicy: scenario.policy
+            )
+
+            XCTAssertEqual(store.belongsToExpectedAccount(), scenario.matches)
+        }
     }
 
     func testFootprintProbeSeesFileAndKeychainShapesWithoutReadingSecrets() {

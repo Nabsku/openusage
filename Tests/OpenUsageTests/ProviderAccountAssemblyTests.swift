@@ -339,6 +339,39 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertFalse(auth.belongsToExpectedAccount(), "aliases from other organizations are never authorized")
     }
 
+    func testKnownDefaultLogoutKeepsVerifiedAccountsWithoutAnUnboundFallback() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [.init(
+            family: "claude", identityKey: "previous", label: nil,
+            sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+        )])
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(),
+            files: FakeFiles([
+                "/Users/dev/.claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stale"}}"#,
+            ]),
+            keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let work = "/Users/dev/.claude-work"
+        let discovery = makeDiscovery(files: [
+            work + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work"}}"#,
+            work + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"work-token"}}"#,
+        ], subdirectories: [work])
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer, accountsStore: store, claudeDiscovery: discovery
+        )
+        let providers = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards, claudeIdentityKeys: assembly.identityKeysByCard,
+            allowsUnboundClaudeFallback: assembly.allowsUnboundClaudeFallback,
+            defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
+        ).filter { ProviderAccountID.family(of: $0.provider.id) == "claude" }
+
+        XCTAssertNil(store.defaultBadgeHolder(family: "claude"))
+        XCTAssertEqual(providers.map { $0.provider.id }, [try XCTUnwrap(assembly.claudeCards.first).id])
+        XCTAssertFalse(assembly.allowsUnboundClaudeFallback)
+    }
+
     func testNoDefaultLoginStillAcceptsAConfigDirOnlyAccount() throws {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)
@@ -598,8 +631,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
 
         let card = try XCTUnwrap(assembly.claudeCards.first)
-        XCTAssertEqual(card.configDirPath, previous)
-        XCTAssertEqual(card.extraLogRoots.map(\.path), [earlier])
+        XCTAssertEqual(card.credential, .configDir(path: previous, keychainLiteral: previous))
+        XCTAssertEqual(card.logRoots.map(\.path), [previous, earlier])
         XCTAssertEqual(store.record(for: card.id)?.sources.first?.anchor, previous)
     }
 
@@ -625,7 +658,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         ).first as? ClaudeProvider)
 
         XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
-        XCTAssertFalse(provider.authStore.allowsDesktopFallback)
+        XCTAssertEqual(provider.authStore.desktopAccessPolicy, .denied)
         XCTAssertFalse(provider.allowsUnattributedPiUsage)
     }
 

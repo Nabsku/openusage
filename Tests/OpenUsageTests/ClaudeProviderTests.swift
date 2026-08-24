@@ -673,6 +673,10 @@ final class ClaudeProviderTests: XCTestCase {
         let t0 = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let clock = TestClock(t0)
         let usageCalls = CallCounter()
+        let credentialPath = "/tmp/claude/.credentials.json"
+        let files = FakeFiles([
+            credentialPath: #"{"claudeAiOauth":{"accessToken":"token","subscriptionType":"max","rateLimitTier":"default_claude_max_20x","scopes":["user:profile"]}}"#
+        ])
         let httpClient = RoutingHTTPClient { request in
             guard request.url.absoluteString.hasSuffix("/api/oauth/usage") else {
                 return HTTPResponse(statusCode: 200, headers: [:], body: Data())
@@ -687,9 +691,7 @@ final class ClaudeProviderTests: XCTestCase {
             return HTTPResponse(statusCode: 429, headers: ["retry-after": "600"], body: Data())
         }
         let provider = ClaudeProvider(
-            authStore: configuredAuthStore(files: FakeFiles([
-                "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"token","subscriptionType":"pro","scopes":["user:profile"]}}"#
-            ]), now: { clock.now }),
+            authStore: configuredAuthStore(files: files, now: { clock.now }),
             usageClient: ClaudeUsageClient(httpClient: httpClient),
             logUsageScanner: ClaudeLogFixture.scanner(home: nil),
             now: { clock.now },
@@ -698,6 +700,7 @@ final class ClaudeProviderTests: XCTestCase {
 
         // 1) Live fetch succeeds and is cached; no warning rides along.
         let first = await provider.refresh()
+        XCTAssertEqual(first.plan, "Max 20x")
         XCTAssertEqual(Self.progress(first.lines, "Session")?.used, 25)
         XCTAssertNil(first.warning)
 
@@ -710,9 +713,12 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertEqual(second.warning?.hasPrefix("Updates blocked by Anthropic"), true)
 
         // 3) Within the cooldown the live call is skipped entirely; the cached bar is still shown and the
-        // warning persists.
+        // warning persists, but a subscription downgrade must update the displayed plan immediately.
         clock.set(t0.addingTimeInterval(60))
+        files.files[credentialPath] =
+            #"{"claudeAiOauth":{"accessToken":"token","subscriptionType":"pro","rateLimitTier":"default_claude_pro","scopes":["user:profile"]}}"#
         let third = await provider.refresh()
+        XCTAssertEqual(third.plan, "Pro")
         XCTAssertEqual(Self.progress(third.lines, "Session")?.used, 25)
         XCTAssertEqual(third.warning?.hasPrefix("Updates blocked by Anthropic"), true)
         XCTAssertEqual(httpClient.requests.filter { $0.url.absoluteString.hasSuffix("/api/oauth/usage") }.count, 2)

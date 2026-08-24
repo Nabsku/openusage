@@ -61,30 +61,27 @@ enum PeerHistoryRemapper {
                 knownIdentities[ProviderAccountID.family(of: cardID), default: []].insert(identity)
             }
         }
-        func parsedClaudeIdentity(_ identity: String) -> (user: String, organization: String?)? {
-            let parts = identity.lowercased().split(separator: "|", omittingEmptySubsequences: false)
-            guard (1...2).contains(parts.count), parts.allSatisfy({ !$0.isEmpty }) else { return nil }
-            return (String(parts[0]), parts.count == 2 ? String(parts[1]) : nil)
-        }
         func accountKey(family: String, identity: String) -> AccountKey? {
-            guard family == "claude", let parsed = parsedClaudeIdentity(identity) else {
+            guard family == "claude", let parsed = ClaudeIdentity(identity) else {
                 return AccountKey(family: family, identity: identity)
             }
-            let organizations = Set((knownIdentities[family] ?? []).compactMap {
-                parsedClaudeIdentity($0).flatMap { $0.user == parsed.user ? $0.organization : nil }
+            let organizations = Set((knownIdentities[family] ?? []).compactMap(ClaudeIdentity.init).compactMap {
+                $0.user == parsed.user ? $0.organization : nil
             })
-            guard parsed.organization != nil || organizations.count <= 1 else { return nil }
-            let organization = parsed.organization ?? organizations.first
-            return AccountKey(family: family, identity: organization.map { "\(parsed.user)|\($0)" } ?? parsed.user)
+            if parsed.organization == nil, organizations.count > 1 { return nil }
+            let canonical = parsed.organization.map { "\(parsed.user)|\($0)" }
+                ?? organizations.first.map { "\(parsed.user)|\($0)" }
+                ?? parsed.user
+            return AccountKey(family: family, identity: canonical)
         }
 
         var localCards: [AccountKey: [String]] = [:]
-        var ambiguousLocalUsers = Set<String>()
+        var ambiguousLocalUsers: Set<String> = []
         for (cardID, identity) in localIdentityByCardID where !identity.isEmpty {
             let family = ProviderAccountID.family(of: cardID)
             guard ProviderAccountID.families.contains(family) else { continue }
             guard let key = accountKey(family: family, identity: identity) else {
-                if let parsed = parsedClaudeIdentity(identity) { ambiguousLocalUsers.insert(parsed.user) }
+                if let parsed = ClaudeIdentity(identity) { ambiguousLocalUsers.insert(parsed.user) }
                 continue
             }
             localCards[key, default: []].append(cardID)
@@ -130,7 +127,7 @@ enum PeerHistoryRemapper {
                     result.quarantined.append(.init(cardID: peerCardID, family: family, reason: .ambiguousLocalIdentity))
                     continue
                 }
-                if family == "claude", let parsed = parsedClaudeIdentity(identity),
+                if family == "claude", let parsed = ClaudeIdentity(identity),
                    ambiguousLocalUsers.contains(parsed.user)
                 {
                     result.quarantined.append(.init(cardID: peerCardID, family: family, reason: .ambiguousLocalIdentity))

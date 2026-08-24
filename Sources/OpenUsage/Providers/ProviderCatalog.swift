@@ -17,6 +17,7 @@ enum ProviderCatalog {
         defaultClaudeVerifiedIdentityAliases: Set<String> = [],
         defaultClaudeCardID: String = "claude",
         claudeIdentityKeys: [String: String] = [:],
+        allowsUnboundClaudeFallback: Bool = true,
         isClaudeDiscoveryComplete: Bool = true,
         allowsUnownedClaudeDesktopFallback: Bool = false,
         defaultClaudeCoworkRoots: [URL]? = nil,
@@ -30,7 +31,8 @@ enum ProviderCatalog {
         // account registry and are resolved at render time (`ProviderAccountRecord.resolvedDisplayName`),
         // so a baked name can never be a stale copy of one.
         var runtimes: [ProviderRuntime] = []
-        if (claudeCards.isEmpty || claudeIdentityKeys[defaultClaudeCardID] != nil)
+        if (claudeIdentityKeys[defaultClaudeCardID] != nil
+            || (claudeCards.isEmpty && allowsUnboundClaudeFallback))
             && !claudeCards.contains(where: { $0.id == defaultClaudeCardID })
         {
             runtimes.append(ClaudeProvider(
@@ -44,7 +46,10 @@ enum ProviderCatalog {
                     desktopAccessPolicy: defaultClaudeDesktopAccess
                         ?? (claudeCards.isEmpty
                             && (isClaudeDiscoveryComplete || allowsUnownedClaudeDesktopFallback)
-                            ? .activeOrganization : .denied)
+                            ? .activeOrganization : .denied),
+                    allowsUnscopedStandardKeychainFallback: claudeCards.isEmpty
+                        && isClaudeDiscoveryComplete
+                        && defaultClaudeDesktopAccess != .denied
                 ),
                 logUsageScanner: ClaudeLogUsageScanner(
                     additionalRoots: defaultClaudeExtraLogRoots,

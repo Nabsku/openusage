@@ -126,6 +126,49 @@ final class ProviderAccountsStoreTests: XCTestCase {
         XCTAssertEqual(store.defaultBadgeHolder(family: "codex")?.identityKey, "acct-c")
     }
 
+    func testObservedLogoutClearsOnlyThatFamilysDefaultSource() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(family: "claude", identityKey: "person"),
+            defaultHomeObservation(family: "codex", identityKey: "codex-person"),
+        ])
+
+        store.reconcile(with: [], clearingDefaultSourcesFor: ["claude"])
+
+        XCTAssertNil(store.defaultBadgeHolder(family: "claude"))
+        XCTAssertEqual(store.defaultBadgeHolder(family: "codex")?.identityKey, "codex-person")
+        XCTAssertTrue(store.record(for: "claude")?.sources.isEmpty == true)
+    }
+
+    func testOrganizationQualificationPreservesCardIdentityAndRename() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [defaultHomeObservation(family: "claude", identityKey: "person")])
+        store.rename(cardID: "claude", to: "My Team")
+
+        let records = store.reconcile(with: [
+            defaultHomeObservation(family: "claude", identityKey: "person|team"),
+        ])
+
+        XCTAssertEqual(records.map(\.id), ["claude"])
+        XCTAssertEqual(records.first?.identityKey, "person|team")
+        XCTAssertEqual(records.first?.identityAliases, ["person"])
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "My Team")
+    }
+
+    func testOrganizationlessAccountNeverMergesAcrossMultipleOrganizations() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(family: "claude", identityKey: "person|team"),
+            .init(family: "claude", identityKey: "person|personal", label: nil, sources: []),
+        ])
+
+        let records = store.reconcile(with: [
+            .init(family: "claude", identityKey: "person", label: nil, sources: []),
+        ])
+
+        XCTAssertEqual(Set(records.map(\.identityKey)), ["person|team", "person|personal"])
+    }
+
     func testReconcileUpdatesLabelButKeepsItWhenObservationHasNone() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         store.reconcile(with: [defaultHomeObservation(family: "claude", identityKey: "acct-a", label: "a@example.com")])
