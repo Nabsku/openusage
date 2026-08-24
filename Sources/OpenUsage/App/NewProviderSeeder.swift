@@ -32,17 +32,28 @@ enum NewProviderSeeder {
         }
 
         let newIDs = enablement.registerKnownProviders(currentIDs)
-        guard !newIDs.isEmpty else { return nil }
-        AppLog.info(.config, "new providers since last run: \(newIDs.sorted()); probing local credentials")
+        let pendingIDs = enablement.pendingDetectionIDs.intersection(currentIDs)
+        let detectionIDs = newIDs.union(pendingIDs)
+        guard !detectionIDs.isEmpty else { return nil }
+        enablement.markProviderDetectionPending(detectionIDs)
+        AppLog.info(
+            .config,
+            "new or interrupted provider checks: \(detectionIDs.sorted()); probing local credentials"
+        )
 
         return Task {
             // Same concurrent local-only probe as first-run detection and the Reset All reseed.
-            let newProviders = providers.filter { newIDs.contains($0.provider.id) }
+            let newProviders = providers.filter { detectionIDs.contains($0.provider.id) }
             let detected = await FirstRunSeeder.detectLocalProviders(newProviders)
+            guard !Task.isCancelled else { return }
+            defer { enablement.finishProviderDetection(detectionIDs) }
             for id in detected.sorted() {
+                guard !Task.isCancelled else { return }
                 // The probe takes a moment; if the user already turned the provider on themselves,
-                // leave their toggle alone (setEnabled would be a no-op anyway).
-                guard !enablement.isEnabled(id) else { continue }
+                // or explicitly toggled it back off, their choice cancels its pending detection.
+                guard enablement.pendingDetectionIDs.contains(id),
+                      !enablement.isEnabled(id)
+                else { continue }
                 AppLog.info(.config, "new provider \(id): credentials detected, enabling")
                 enablement.setEnabled(true, for: id)
             }

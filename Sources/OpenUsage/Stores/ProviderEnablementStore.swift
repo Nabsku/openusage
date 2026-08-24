@@ -25,6 +25,7 @@ final class ProviderEnablementStore {
     private static let disabledStorageKey = "openusage.disabledProviders.v1"
     private static let enabledStorageKey = "openusage.enabledProviders.v1"
     private static let knownStorageKey = "openusage.knownProviders.v1"
+    private static let pendingDetectionStorageKey = "openusage.pendingProviderDetection.v1"
 
     /// Posted when the enabled-provider set actually changes. The refresh loop listens for this to wake
     /// early and fetch a newly-enabled provider promptly, instead of waiting out the full interval —
@@ -53,6 +54,9 @@ final class ProviderEnablementStore {
     /// Every provider ID this install has ever seen (see the type comment). Seeded by the v2 settings
     /// migration or `FirstRunSeeder`, then grown by `registerKnownProviders`.
     private(set) var knownIDs: Set<String>
+    /// Credential checks that were registered but have not finished. Account graph replacement can
+    /// cancel their owning task, so the next graph resumes them without mistaking "known" for done.
+    private(set) var pendingDetectionIDs: Set<String>
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -65,6 +69,7 @@ final class ProviderEnablementStore {
             self.disabledIDs = Set(defaults.stringArray(forKey: Self.disabledStorageKey) ?? [])
         }
         self.knownIDs = Set(defaults.stringArray(forKey: Self.knownStorageKey) ?? [])
+        self.pendingDetectionIDs = Set(defaults.stringArray(forKey: Self.pendingDetectionStorageKey) ?? [])
     }
 
     func isEnabled(_ id: String) -> Bool {
@@ -89,6 +94,9 @@ final class ProviderEnablementStore {
             guard disabledIDs != before else { return }
             defaults.set(Array(disabledIDs), forKey: Self.disabledStorageKey)
         }
+        // A real user choice owns this provider from now on, even if a credential check started
+        // before the toggle and reports a login after an account graph replacement.
+        finishProviderDetection([id])
         // Clear the backoff BEFORE the wake notification, so the refresh it triggers actually probes the
         // just-enabled provider instead of skipping it as recently-failed.
         if enabled { onProviderEnabled?(id) }
@@ -109,6 +117,24 @@ final class ProviderEnablementStore {
         knownIDs.formUnion(new)
         defaults.set(Array(knownIDs), forKey: Self.knownStorageKey)
         return new
+    }
+
+    func markProviderDetectionPending(_ ids: Set<String>) {
+        updatePendingDetection(pendingDetectionIDs.union(ids))
+    }
+
+    func finishProviderDetection(_ ids: Set<String>) {
+        updatePendingDetection(pendingDetectionIDs.subtracting(ids))
+    }
+
+    private func updatePendingDetection(_ pending: Set<String>) {
+        guard pending != pendingDetectionIDs else { return }
+        pendingDetectionIDs = pending
+        if pending.isEmpty {
+            defaults.removeObject(forKey: Self.pendingDetectionStorageKey)
+        } else {
+            defaults.set(Array(pending), forKey: Self.pendingDetectionStorageKey)
+        }
     }
 
     func seedEnabledProviders(_ ids: Set<String>) {

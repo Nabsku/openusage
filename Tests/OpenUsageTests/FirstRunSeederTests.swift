@@ -95,6 +95,42 @@ final class FirstRunSeederTests: XCTestCase {
         XCTAssertEqual(enablement.enabledIDs, ["claude", "cursor"])
     }
 
+    func testCancelledFirstRunResumesAdditivelyWithoutUndoingUserChoices() async throws {
+        let defaults = makeDefaults("cancelled-first-run-resume")
+        let staleEnablement = ProviderEnablementStore(defaults: defaults)
+        let onboarding = OnboardingStore(defaults: makeDefaults("cancelled-first-run-onboarding"))
+        let providers: [ProviderRuntime] = [
+            stub("claude", hasCredentials: true),
+            stub("codex", hasCredentials: true),
+            stub("cursor", hasCredentials: false),
+            stub("grok", hasCredentials: true),
+            stub("devin", hasCredentials: true),
+            stub("windsurf", hasCredentials: false),
+        ]
+        let oldTask = try XCTUnwrap(FirstRunSeeder.seedIfNeeded(
+            isFreshInstall: true, providers: providers, enablement: staleEnablement, onboarding: onboarding
+        ))
+
+        let replacementEnablement = ProviderEnablementStore(defaults: defaults)
+        replacementEnablement.setEnabled(false, for: "codex")
+        replacementEnablement.setEnabled(true, for: "windsurf")
+        replacementEnablement.setEnabled(true, for: "grok")
+        replacementEnablement.setEnabled(false, for: "grok")
+        oldTask.cancel()
+        await oldTask.value
+        XCTAssertEqual(replacementEnablement.enabledIDs, ["claude", "cursor", "windsurf"])
+
+        let resumedTask = try XCTUnwrap(NewProviderSeeder.reconcileIfNeeded(
+            providers: providers, enablement: replacementEnablement
+        ))
+        await resumedTask.value
+
+        XCTAssertEqual(replacementEnablement.enabledIDs, ["claude", "cursor", "devin", "windsurf"])
+        XCTAssertFalse(replacementEnablement.isEnabled("codex"))
+        XCTAssertFalse(replacementEnablement.isEnabled("grok"))
+        XCTAssertTrue(replacementEnablement.pendingDetectionIDs.isEmpty)
+    }
+
     // MARK: - Reset All reseed
 
     func testReseedOverwritesCurrentChoicesWithDetectedSet() async {

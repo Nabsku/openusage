@@ -171,6 +171,24 @@ final class ProviderEnablementStoreTests: XCTestCase {
         wait(for: [notPosted], timeout: 0.2)
     }
 
+    func testPendingChecksPersistAcrossReplacementAndYieldToUserChoices() {
+        let defaults = makeDefaults("pending-persistence")
+        let original = ProviderEnablementStore(defaults: defaults)
+        original.seedEnabledProviders(["claude"])
+        original.markProviderDetectionPending(["claude@deadbeef", "grok"])
+
+        let replacement = ProviderEnablementStore(defaults: defaults)
+        XCTAssertEqual(replacement.pendingDetectionIDs, ["claude@deadbeef", "grok"])
+
+        replacement.setEnabled(true, for: "grok")
+        XCTAssertEqual(replacement.pendingDetectionIDs, ["claude@deadbeef"])
+        XCTAssertEqual(ProviderEnablementStore(defaults: defaults).pendingDetectionIDs, ["claude@deadbeef"])
+
+        replacement.finishProviderDetection(["claude@deadbeef"])
+        XCTAssertTrue(ProviderEnablementStore(defaults: defaults).pendingDetectionIDs.isEmpty)
+        XCTAssertNil(defaults.object(forKey: "openusage.pendingProviderDetection.v1"))
+    }
+
     private func makeDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.Enablement.\(name).\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

@@ -102,6 +102,46 @@ final class NewProviderSeederTests: XCTestCase {
         XCTAssertEqual(enableCallbacks, ["windsurf"], "the seeder must not fire a second enable")
     }
 
+    func testCancelledDetectionWaitsForAccountReturnAndPreservesUserChoices() async throws {
+        let defaults = makeDefaults("cancelled-graph-resume")
+        let staleEnablement = ProviderEnablementStore(defaults: defaults)
+        staleEnablement.seedEnabledProviders(["claude"])
+        staleEnablement.registerKnownProviders(["claude", "codex"])
+        let returningAccount = probe("claude@deadbeef", hasCredentials: true)
+        let userOwned = probe("windsurf", hasCredentials: true)
+        let providers: [ProviderRuntime] = [
+            probe("claude", hasCredentials: true), probe("codex", hasCredentials: false), returningAccount, userOwned,
+        ]
+        let oldTask = try XCTUnwrap(NewProviderSeeder.reconcileIfNeeded(
+            providers: providers, enablement: staleEnablement
+        ))
+
+        let replacementEnablement = ProviderEnablementStore(defaults: defaults)
+        replacementEnablement.setEnabled(true, for: "codex")
+        replacementEnablement.setEnabled(true, for: "windsurf")
+        replacementEnablement.setEnabled(false, for: "windsurf")
+        oldTask.cancel()
+        await oldTask.value
+
+        XCTAssertEqual(replacementEnablement.enabledIDs, ["claude", "codex"])
+        XCTAssertEqual(replacementEnablement.pendingDetectionIDs, ["claude@deadbeef"])
+        XCTAssertNil(NewProviderSeeder.reconcileIfNeeded(
+            providers: providers.filter { $0.provider.id != "claude@deadbeef" }, enablement: replacementEnablement
+        ))
+        XCTAssertEqual(replacementEnablement.pendingDetectionIDs, ["claude@deadbeef"])
+
+        let resumedTask = try XCTUnwrap(NewProviderSeeder.reconcileIfNeeded(
+            providers: providers, enablement: replacementEnablement
+        ))
+        await resumedTask.value
+
+        XCTAssertEqual(replacementEnablement.enabledIDs, ["claude", "codex", "claude@deadbeef"])
+        XCTAssertFalse(replacementEnablement.isEnabled("windsurf"))
+        XCTAssertTrue(replacementEnablement.pendingDetectionIDs.isEmpty)
+        XCTAssertEqual(returningAccount.probeCount, 2)
+        XCTAssertEqual(userOwned.probeCount, 1)
+    }
+
     // MARK: - Helpers
 
     private func seededStore(_ name: String, enabled: Set<String>, known: Set<String>) -> ProviderEnablementStore {
