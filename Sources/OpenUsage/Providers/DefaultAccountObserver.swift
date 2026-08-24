@@ -75,10 +75,11 @@ struct DefaultAccountObserver: Sendable {
             guard value == "~" || value.hasPrefix("~/") else { return value }
             return homeDirectory.path + String(value.dropFirst())
         }
-        let anchor = expand(configDir)
-        let identityPath = anchor == expand("~/.claude")
+        let anchor = URL(fileURLWithPath: expand(configDir)).standardizedFileURL.path
+        let defaultAnchor = URL(fileURLWithPath: expand("~/.claude")).standardizedFileURL.path
+        let identityPath = anchor == defaultAnchor
             ? expand("~/.claude.json")
-            : anchor + "/.claude.json"
+            : URL(fileURLWithPath: anchor).appendingPathComponent(".claude.json").path
         return (anchor, identityPath)
     }
 

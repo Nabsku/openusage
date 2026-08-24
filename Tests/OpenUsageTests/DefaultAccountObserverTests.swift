@@ -73,7 +73,7 @@ final class DefaultAccountObserverTests: XCTestCase {
 
     func testTrailingSlashOverrideUsesTheSameIdentityPathDuringObservationAndRefresh() {
         let environment = FakeEnvironment(["CLAUDE_CONFIG_DIR": "~/.claude/"])
-        let files = FakeFiles(["/Users/dev/.claude//.claude.json": claudeStateJSON()])
+        let files = FakeFiles(["/Users/dev/.claude.json": claudeStateJSON()])
         let observer = DefaultAccountObserver(
             environment: environment, files: files, keychain: FakeKeychain(),
             homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
@@ -85,7 +85,7 @@ final class DefaultAccountObserverTests: XCTestCase {
 
         XCTAssertEqual(
             observer.observeClaude(),
-            .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude/")
+            .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude")
         )
         XCTAssertTrue(auth.belongsToExpectedAccount())
     }

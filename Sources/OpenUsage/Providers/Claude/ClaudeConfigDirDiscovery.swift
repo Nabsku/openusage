@@ -47,7 +47,7 @@ struct ClaudeConfigDirDiscovery {
         keychain: KeychainAccessing = SecurityKeychainAccessor(),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         listSubdirectories: @escaping @Sendable (URL) -> [URL] = Self.filesystemSubdirectories,
-        timeBudget: TimeInterval = 3,
+        timeBudget: TimeInterval = 0.4,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.environment = environment
