@@ -8,6 +8,15 @@ A fresh install doesn't turn on every provider OpenUsage knows about. It starts 
 
 This full detection only happens on a brand-new install. Updates never change the providers you already have on or off — but when an update ships a provider you've never seen, the same local check runs once for just that provider and turns it on only if you actually have the tool. See [Which Providers Are On](provider-enablement.md) for the full lifecycle.
 
+When OpenUsage finds multiple verified Claude logins, each account gets its own provider card. Changing
+the active Claude Code login while the app is running updates those cards automatically; an account's
+name, metric choices, menu-bar stars, and position stay with that account instead of following the
+login location. If an account temporarily disappears, its card stays hidden until a verified login
+for that same account returns. Account cards use their organization names when more than one account
+is present, so a work account and its personal counterpart can appear as **Claude — SUNSTORY** and
+**Claude — Personal** even when both use the same email address. Codex still uses a single card;
+if its verified account changes, that card's name and custom label follow the current account.
+
 Each provider card leads with its **Always Visible** metrics. Any metrics you've moved below the **On Demand** line are tucked away behind the in-card caret — click it to reveal them below the caret, click again to collapse. Open cards stay open across popover closes and app restarts. A provider with neither On Demand metrics nor quick links shows no caret.
 
 When you expand a card, the tucked-away metrics open below the caret as a single-column list, so each detail row keeps the full card width.
@@ -16,13 +25,18 @@ A provider card can also show **quick-link buttons** pinned at the bottom of its
 
 ## Total Spend
 
-When any enabled provider tracks daily spend (Claude, Codex, Cursor, Grok, or OpenCode), a card sits above the provider sections. The title is a pull-down menu for **Cost**, **Cost/MTok**, or **Tokens** (Cost is the default; the choice sticks across restarts). A capsule switcher flips the period between **Today**, **Yesterday**, and **30 Days**. The ring, center total, and ranked legend follow the selected metric:
+When any enabled provider tracks daily spend (Antigravity, Claude, Codex, Cursor, Grok, or OpenCode), a card sits above the provider sections. The title is a pull-down menu for **Cost**, **Cost/MTok**, or **Tokens** (Cost is the default; the choice sticks across restarts). A capsule switcher flips the period between **Today**, **Yesterday**, and **30 Days**. The ring, center total, and ranked legend follow the selected metric:
 
 - **Cost** — each segment is that provider's share of combined dollars (biggest spender first).
 - **Cost/MTok** — each segment is sized by that provider's dollars-per-million-tokens rate; the center is the blended rate across providers that have both spend and tokens; the legend lists each provider's own rate.
 - **Tokens** — each segment is that provider's share of combined tokens.
 
-The ring center is always two short lines — a compact number on top and a quiet unit underneath (`$533` / `dollars`, `12.4` / `million`, or `$1.37` / `MTok`) — so Cost/MTok and big totals stay readable in the hole. Cost modes keep the `$` on the number. Hover the center for the exact one-line figure (and a note when any contributor's dollars are a local estimate — Cost and Cost/MTok only). Each provider keeps a fixed color drawn from its brand (Claude's terracotta, OpenAI's green, and so on), and even a tiny share keeps a visible sliver of the ring. Providers with nothing for the selected metric simply don't appear — they're never counted as zero. (An enabled provider counts even if you've hidden its own spend rows in Customize; other dollar rows, like OpenRouter's API spend, never mix in.) The header's share icon (or right-clicking the card) copies a branded PNG of the ring to your clipboard, just like sharing a provider card. The header also carries a small ⓘ naming the providers that feed the total. A period with nothing to show for the active metric shows a quiet empty state instead of hiding the card. Don't want the card at all? Turn it off with **Show Total Spend** at the top of [Settings](settings.md).
+Each Claude account gets its own ring segment and legend entry instead of being folded into a single
+Claude total. The ring and legend are ranked by the selected amount, highest first, even when you've
+dragged the dashboard cards into a different order. A verified account that only exists on another
+synced Mac can also contribute its own separate account-code entry without creating a local card.
+
+The ring center is always two short lines — a compact number on top and a quiet unit underneath (`$533` / `dollars`, `12.4` / `million`, or `$1.37` / `MTok`) — so Cost/MTok and big totals stay readable in the hole. Cost modes keep the `$` on the number. Hover the center for the exact one-line figure (and a note when any contributor's dollars are a local estimate — Cost and Cost/MTok only). Each provider keeps a fixed brand color, such as Claude's terracotta or OpenAI's green; additional accounts use consistent related shades so separate accounts remain distinguishable as the chart re-sorts. Even a tiny share keeps a visible sliver of the ring. Providers with nothing for the selected metric simply don't appear — they're never counted as zero. (An enabled provider counts even if you've hidden its own spend rows in Customize; other dollar rows, like OpenRouter's API spend, never mix in.) The header's share icon (or right-clicking the card) copies a branded PNG of the ring to your clipboard, just like sharing a provider card. The header also carries a small ⓘ naming the providers that feed the total. A period with nothing to show for the active metric shows a quiet empty state instead of hiding the card. Don't want the card at all? Turn it off with **Show Total Spend** at the top of [Settings](settings.md).
 
 ## Rows
 

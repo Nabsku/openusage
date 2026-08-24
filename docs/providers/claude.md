@@ -47,27 +47,38 @@ Local spend does not require a Claude OAuth login. If Claude Code uses an API-ke
 
 ## Multiple accounts
 
-If you keep more than one Claude login on this Mac using custom config dirs (separate `CLAUDE_CONFIG_DIR`
-homes, each with its own sign-in), OpenUsage finds them at launch and gives each **account** its own
-card, with its own limits, plan, and spend tiles read from that home. A custom dir signed into the same
-account as your main login doesn't become a second card — its session logs simply count into the main
-card's spend tiles.
+OpenUsage discovers separate Claude Code logins in hidden folders directly under your home directory
+and folders directly under `~/.config`. Each account gets its own card, limits, plan, and local spend;
+another folder signed into the same account contributes to the existing card instead of creating a
+duplicate. The account using `$CLAUDE_CONFIG_DIR` is treated as the default login, even when that
+folder lives elsewhere. Cards stay attached to their original account when the default login changes.
 
-Cowork sessions are account-aware too. Each Cowork session folder records which account ran it: sessions
-from your main login keep counting on the main card, and sessions from an account that already has a
-config-dir card count on that card. If Claude Desktop is signed into a *different* account than the CLI,
-its Cowork sessions become their own card, backed read-only by Desktop's login (same Safe Storage read
-as above, pinned to that account's organization so it never borrows another card's token) — with that
-account's limits, plan, and its Cowork sessions as the card's spend. Signing Desktop out again makes
-the card disappear the same way a deleted config dir does.
+Cowork session folders are assigned to the account named by their own Claude state. A separate
+Claude Desktop account needs at least one Cowork session identifying its organization and a matching
+cached Desktop login; signing into Desktop alone does not create a card. Desktop credentials are
+pinned to their verified or uniquely remembered organization, so switching Desktop's active
+organization cannot make a card borrow another account's usage. If users share an organization, or
+another known user's organization is missing, its Desktop login is not used until the owner can be
+verified. Previously seen accounts remain safety checks even while their cards are hidden. Sessions
+without a provable owner are left unassigned when multiple accounts are present. An incomplete session
+scan temporarily withholds Desktop spend history while a verified single-account login can still show
+its live limits. Old Cowork sessions can keep a signed-out organization visible with a login warning.
 
-Extra cards are named from the account ("Claude — Acme Corp"); right-click a card and choose **Rename…**
-(or use the Name field in Customize) to call it whatever you like. A card only shows while its login is
-still found on this Mac — log it out or delete the dir and the card disappears, keeping its
-customization and history for if it returns. Turn a card off like any provider in Customize.
+Changes to the default Claude Code login are detected within about five seconds; custom folders,
+Desktop logins, and new Cowork sessions are checked about once a minute. Existing sessions update on
+normal refreshes. The first Desktop refresh may ask for Keychain permission; choose **Always Allow**.
+Subscription upgrades or downgrades appear after Claude Code or Desktop updates its saved login
+details and OpenUsage refreshes; OpenUsage does not make a separate billing request.
 
-In the [CLI](../cli.md) and [local API](../local-http-api.md), extra cards appear under ids like
-`claude@ab12cd34`; requesting `claude` returns every Claude card.
+Cards keep their account identity, layout, and menu-bar pins when a login moves between sources or
+temporarily disappears. When several accounts share the same email address, their cards use the
+organization name instead; Claude's generic email-based organization becomes **Personal**. For
+example, **Claude — SUNSTORY** and **Claude — Personal** stay easy to tell apart. Right-click a card
+and choose **Rename…**, or change its name in Customize. Extra cards have identifiers such as
+`claude@ab12cd34`; the original account keeps the existing
+`claude` identifier even when it no longer occupies the default login. In the local API and CLI,
+requesting `claude` returns every Claude account. There are no manual Add Account or Remove Account
+controls; sign in or out through Claude Code or Claude Desktop instead.
 
 ## Troubleshooting
 

@@ -20,7 +20,6 @@ struct WidgetGroupedListView: View {
     @State private var frameStore = ReorderFrameStore()
     @State private var activeProviderID: String?
     @State private var activeMetricID: String?
-    /// The card the "Rename…" alert is currently editing; `nil` when the alert is closed.
     @State private var renameCardID: String?
     @State private var renameDraft = ""
     @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
@@ -40,7 +39,6 @@ struct WidgetGroupedListView: View {
             TextField("Name", text: $renameDraft)
             Button("Rename") {
                 if let renameCardID {
-                    // A cleared field resets the card back to its derived name.
                     container.accounts.rename(cardID: renameCardID, to: renameDraft)
                 }
             }
@@ -89,11 +87,9 @@ struct WidgetGroupedListView: View {
             Button("Refresh \(name)") {
                 Task { await dataStore.refresh(providerID: group.provider.id, force: true) }
             }
-            // Renaming needs an account record to write to, so it only shows on account-model cards
-            // whose identity has been observed at least once.
             if container.canRename(group.provider.id) {
                 Button("Rename…") {
-                    renameDraft = name
+                    renameDraft = container.accounts.runtimeRecord(for: group.provider.id)?.customLabel ?? ""
                     renameCardID = group.provider.id
                 }
             }

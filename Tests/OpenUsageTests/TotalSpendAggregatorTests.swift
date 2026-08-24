@@ -180,27 +180,48 @@ final class TotalSpendAggregatorTests: XCTestCase {
 }
 
 final class TotalSpendPaletteTests: XCTestCase {
-    func testExistingBrandColorsRemainStable() {
+    func testBareProviderBrandColorsRemainUnchanged() {
         XCTAssertEqual(TotalSpendPalette.color(for: "claude"),
                        Color(red: 222.0 / 255, green: 115.0 / 255, blue: 86.0 / 255))
         XCTAssertEqual(TotalSpendPalette.color(for: "codex"),
                        Color(red: 16.0 / 255, green: 163.0 / 255, blue: 127.0 / 255))
         XCTAssertNil(TotalSpendPalette.accountComponents(for: "claude"))
+        XCTAssertNil(TotalSpendPalette.accountComponents(for: "codex"))
     }
 
-    func testAccountAndRemoteAliasShareOneDistinctBrandShade() throws {
-        let first = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@11111111"))
-        let second = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@22222222"))
-        XCTAssertNotEqual(first, second)
-        XCTAssertEqual(first, TotalSpendPalette.accountComponents(for: "claude@peer-11111111"))
-        XCTAssertEqual(first, TotalSpendPalette.accountComponents(for: "claude@11111111"))
-        XCTAssertTrue(first.hue <= 0.15 || first.hue >= 0.90)
-        XCTAssertTrue((0.62...0.94).contains(first.brightness))
+    func testAccountColorIsStableAndMatchesItsRemoteOnlyAlias() throws {
+        let local = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@ab12cd34"))
+        for alias in ["claude@ab12cd34", "claude@AB12CD34", "claude@peer-ab12cd34"] {
+            XCTAssertEqual(local, TotalSpendPalette.accountComponents(for: alias))
+        }
+        XCTAssertEqual(TotalSpendPalette.color(for: "claude@ab12cd34"),
+                       TotalSpendPalette.color(for: "claude@peer-ab12cd34"))
     }
 
-    func testUnknownProvidersKeepTheirFallbackColor() {
+    func testSiblingAccountsThatCollidedInTheLegacyFallbackGetDistinctColors() throws {
+        let siblings = try ["11111111", "22222222", "33333333"].map {
+            try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@\($0)"))
+        }
+        XCTAssertNotEqual(siblings[0], siblings[1])
+        XCTAssertNotEqual(siblings[0], siblings[2])
+        XCTAssertNotEqual(siblings[1], siblings[2])
+    }
+
+    func testAccountShadesStayNearTheirFamilyBrandAndRemainLegible() throws {
+        let claude = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@ab12cd34"))
+        let codex = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "codex@ab12cd34"))
+        XCTAssertTrue(claude.hue <= 0.15 || claude.hue >= 0.90)
+        XCTAssertTrue((0.33...0.56).contains(codex.hue))
+        for color in [claude, codex] {
+            XCTAssertGreaterThanOrEqual(color.saturation, 0.50)
+            XCTAssertTrue((0.62...0.94).contains(color.brightness))
+        }
+    }
+
+    func testUnknownProvidersRetainTheExistingFallbackPalette() {
         XCTAssertEqual(TotalSpendPalette.color(for: "mystery-provider"),
                        Color(red: 162.0 / 255, green: 132.0 / 255, blue: 94.0 / 255))
+        XCTAssertNil(TotalSpendPalette.accountComponents(for: "mystery-provider"))
         XCTAssertNil(TotalSpendPalette.accountComponents(for: "cursor@ab12cd34"))
     }
 }
