@@ -32,9 +32,9 @@ the same card everywhere, even when one Mac shows it as the main card and anothe
 card.
 
 An account you use on another Mac but have no login for here doesn't become a card: it appears as its
-own slice in **Total Spend** ("Claude · Mac mini"), so the number at the top is the whole truth across
-your Macs. The moment you log that account in locally, its card appears with the full cross-machine
-history already attached.
+own slice in **Total Spend** ("Claude · Mac mini", or "Claude · 2 Macs" when that account spans two
+other Macs), so the number at the top is the whole truth across your Macs. The moment you log that
+account in locally, its card appears with the full cross-machine history already attached.
 
 Macs running an older OpenUsage read their own format but report this Mac's newer file as "update
 OpenUsage" — update both sides to sync multi-account machines.

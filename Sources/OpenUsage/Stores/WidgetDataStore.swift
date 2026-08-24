@@ -517,7 +517,8 @@ final class WidgetDataStore {
         isProviderEnabled: @MainActor (String) -> Bool,
         now: Date
     ) -> [(provider: Provider, snapshot: ProviderSnapshot)] {
-        remoteOnly.compactMap { entry in
+        let nameCounts = Dictionary(remoteOnly.map { ($0.displayName, 1) }, uniquingKeysWith: +)
+        return remoteOnly.compactMap { entry in
             guard let familyProvider = registry.providers.first(where: {
                       ProviderAccountID.family(of: $0.id) == entry.family
                           && isProviderEnabled($0.id)
@@ -528,9 +529,12 @@ final class WidgetDataStore {
             let history = UsageHistoryAggregator.mergeHistories(entry.histories, now: now)
             guard !history.series.daily.isEmpty else { return nil }
 
+            let displayName = nameCounts[entry.displayName] == 1
+                ? entry.displayName
+                : "\(entry.displayName) · \(ProviderAccountID.hash8(entry.identityKey).prefix(4))"
             let provider = Provider(
                 id: "\(entry.family)@peer-\(ProviderAccountID.hash8(entry.identityKey))",
-                displayName: "\(entry.family.capitalized) · \(entry.deviceName)",
+                displayName: displayName,
                 icon: familyProvider.icon
             )
             let empty = ProviderSnapshot(

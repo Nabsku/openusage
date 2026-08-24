@@ -25,8 +25,15 @@ enum PeerHistoryRemapper {
         var identityKey: String
         var family: String
         var cardID: String
-        var deviceName: String
+        var deviceNamesByID: [String: String]
         var histories: [ProviderUsageHistory]
+
+        var displayName: String {
+            let deviceLabel = deviceNamesByID.count == 1
+                ? deviceNamesByID.values.first ?? "Another Mac"
+                : "\(deviceNamesByID.count) Macs"
+            return "\(family.capitalized) · \(deviceLabel)"
+        }
     }
 
     static func remap(
@@ -97,9 +104,10 @@ enum PeerHistoryRemapper {
                     identityKey: identity,
                     family: family,
                     cardID: ProviderAccountID.make(family: family, identityKey: identity),
-                    deviceName: document.deviceName,
+                    deviceNamesByID: [:],
                     histories: []
                 )
+                entry.deviceNamesByID[document.deviceID] = document.deviceName
                 entry.histories.append(history)
                 remoteAccounts[key] = entry
             }

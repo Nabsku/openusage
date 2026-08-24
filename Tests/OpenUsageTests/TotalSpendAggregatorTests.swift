@@ -193,6 +193,7 @@ final class TotalSpendPaletteTests: XCTestCase {
         let second = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@22222222"))
         XCTAssertNotEqual(first, second)
         XCTAssertEqual(first, TotalSpendPalette.accountComponents(for: "claude@11111111"))
+        XCTAssertEqual(first, TotalSpendPalette.accountComponents(for: "claude@peer-11111111"))
         XCTAssertTrue(first.hue <= 0.15 || first.hue >= 0.90)
         XCTAssertTrue((0.62...0.94).contains(first.brightness))
     }

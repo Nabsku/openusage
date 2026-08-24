@@ -63,9 +63,29 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertTrue(remapped.histories.isEmpty)
         XCTAssertEqual(remapped.remoteOnly.count, 1)
         XCTAssertEqual(remapped.remoteOnly.first?.family, "claude")
-        XCTAssertEqual(remapped.remoteOnly.first?.deviceName, "Mac mini")
+        XCTAssertEqual(remapped.remoteOnly.first?.deviceNamesByID.values.first, "Mac mini")
         XCTAssertEqual(remapped.remoteOnly.first?.cardID,
                        ProviderAccountID.make(family: "claude", identityKey: "uuid-other|org-x"))
+    }
+
+    func testRemapKeepsOnlyTheNewestVerifiedHistoryFromEachDevice() {
+        let previous = makeDocument(
+            deviceID: "same-mac", updatedAt: Date(timeIntervalSince1970: 100),
+            providers: ["claude": history(day: "2026-07-16", tokens: 900, cost: 90)],
+            identities: ["claude": maxKey]
+        )
+        let current = makeDocument(
+            deviceID: "same-mac", updatedAt: Date(timeIntervalSince1970: 200),
+            providers: ["claude": history(day: "2026-07-16", tokens: 20, cost: 2)],
+            identities: ["claude": maxKey]
+        )
+
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [previous, current], localIdentityByCardID: ["claude": maxKey]
+        )
+
+        XCTAssertEqual(remapped.histories.count, 1)
+        XCTAssertEqual(remapped.histories.first?.history.series.daily.first?.totalTokens, 20)
     }
 
     func testRemapLegacyAccountHistoryWithoutIdentityIsQuarantined() {
@@ -201,6 +221,55 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertTrue(dataStore.remoteOnlySpend.isEmpty, "sync off returns Total Spend to local-only")
     }
 
+    func testOneRemoteAccountAcrossMultipleMacsHasOneStableLabel() {
+        let dataStore = WidgetDataStore(
+            registry: makeRegistry(), providers: [], cache: scratchCache(),
+            defaults: makeScratchDefaults("MultipleMacs"),
+            providerIdentityKeys: ["claude": maxKey, "claude@f15456b0": teamKey]
+        )
+        let today = dayKey(Date())
+        let mini = makeDocument(
+            deviceName: "Mac mini", providers: ["claude": history(day: today, tokens: 10, cost: 1)],
+            identities: ["claude": "remote-account"]
+        )
+        let laptop = makeDocument(
+            deviceName: "Mac mini", providers: ["claude": history(day: today, tokens: 20, cost: 2)],
+            identities: ["claude": "remote-account"]
+        )
+
+        dataStore.setPeerHistoryDocuments([mini, laptop], ownDeviceID: "this-mac")
+        XCTAssertEqual(dataStore.remoteOnlySpend.map(\.provider.displayName), ["Claude · 2 Macs"])
+
+        dataStore.setPeerHistoryDocuments([laptop, mini], ownDeviceID: "this-mac")
+        XCTAssertEqual(dataStore.remoteOnlySpend.map(\.provider.displayName), ["Claude · 2 Macs"])
+    }
+
+    func testMultipleRemoteAccountsOnTheSameMacHaveDistinctLabels() {
+        let dataStore = WidgetDataStore(
+            registry: makeRegistry(), providers: [], cache: scratchCache(),
+            defaults: makeScratchDefaults("SameMac"),
+            providerIdentityKeys: ["claude": maxKey, "claude@f15456b0": teamKey]
+        )
+        let today = dayKey(Date())
+        let document = makeDocument(
+            deviceName: "Mac mini", providers: [
+                "claude": history(day: today, tokens: 10, cost: 1),
+                "claude@12345678": history(day: today, tokens: 20, cost: 2),
+            ],
+            identities: ["claude": "remote-a", "claude@12345678": "remote-b"]
+        )
+
+        dataStore.setPeerHistoryDocuments([document], ownDeviceID: "this-mac")
+
+        XCTAssertEqual(
+            Set(dataStore.remoteOnlySpend.map(\.provider.displayName)),
+            [
+                "Claude · Mac mini · \(ProviderAccountID.hash8("remote-a").prefix(4))",
+                "Claude · Mac mini · \(ProviderAccountID.hash8("remote-b").prefix(4))",
+            ]
+        )
+    }
+
     // MARK: - Fixtures
 
     private func makeRegistry() -> WidgetRegistry {
@@ -228,14 +297,16 @@ final class PeerHistoryIdentityTests: XCTestCase {
     }
 
     private func makeDocument(
+        deviceID: String = UUID().uuidString,
         deviceName: String = "Peer",
+        updatedAt: Date = Date(),
         providers: [String: ProviderUsageHistory],
         identities: [String: String]?
     ) -> UsageHistoryDocument {
         UsageHistoryDocument(
-            deviceID: UUID().uuidString,
+            deviceID: deviceID,
             deviceName: deviceName,
-            updatedAt: Date(),
+            updatedAt: updatedAt,
             providers: providers,
             identities: identities
         )

@@ -46,7 +46,8 @@ enum TotalSpendPalette {
               let brandHex = accountBrandHex[String(providerID[..<separator])]
         else { return nil }
 
-        let accountKey = String(providerID[providerID.index(after: separator)...]).lowercased()
+        var accountKey = String(providerID[providerID.index(after: separator)...]).lowercased()
+        if accountKey.hasPrefix("peer-") { accountKey.removeFirst("peer-".count) }
         guard !accountKey.isEmpty else { return nil }
 
         var hash: UInt64 = 0xcbf29ce484222325

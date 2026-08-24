@@ -15,28 +15,13 @@ final class UsageHistoryAggregatorTests: XCTestCase {
             lines: [],
             usageHistory: history(tokens: 9_000, cost: 90, model: "Cursor Model")
         )
-        let oldDuplicate = document(
-            deviceID: "peer-a",
-            updatedAt: 100,
-            providers: ["claude": history(tokens: 9_999, cost: 99, model: "Opus")]
-        )
-        let newestDuplicate = document(
-            deviceID: "peer-a",
-            updatedAt: 200,
-            providers: [
-                "claude": history(tokens: 200, cost: 2, model: "opus", unknown: ["unknown-b"]),
-                "cursor": history(tokens: 9_000, cost: 90, model: "Cursor Model")
-            ]
-        )
-        let secondPeer = document(
-            deviceID: "peer-b",
-            updatedAt: 150,
-            providers: ["claude": history(tokens: 50, cost: nil, model: "Sonnet")]
-        )
-
         let merged = UsageHistoryAggregator.merged(
             localSnapshots: ["claude": local, "cursor": cursor],
-            peerDocuments: [oldDuplicate, newestDuplicate, secondPeer],
+            peerHistories: [
+                ("claude", history(tokens: 200, cost: 2, model: "opus", unknown: ["unknown-b"])),
+                ("cursor", history(tokens: 9_000, cost: 90, model: "Cursor Model")),
+                ("claude", history(tokens: 50, cost: nil, model: "Sonnet")),
+            ],
             descriptors: [
                 "claude": UsageHistoryDescriptor(scope: .machineLocal, estimatedCost: true, sourceNote: "logs"),
                 "cursor": UsageHistoryDescriptor(scope: .accountWide, estimatedCost: true, sourceNote: "export")
@@ -77,7 +62,7 @@ final class UsageHistoryAggregatorTests: XCTestCase {
 
         let merged = UsageHistoryAggregator.merged(
             localSnapshots: [:],
-            peerDocuments: [document(deviceID: "peer", updatedAt: 100, providers: ["claude": peerHistory])],
+            peerHistories: [("claude", peerHistory)],
             descriptors: [
                 "claude": UsageHistoryDescriptor(scope: .machineLocal, estimatedCost: true, sourceNote: "logs")
             ],
@@ -143,19 +128,6 @@ final class UsageHistoryAggregatorTests: XCTestCase {
                 ])
             ]),
             unknownModelsByDay: unknown.isEmpty ? [:] : ["2026-07-13": unknown]
-        )
-    }
-
-    private func document(
-        deviceID: String,
-        updatedAt: TimeInterval,
-        providers: [String: ProviderUsageHistory]
-    ) -> UsageHistoryDocument {
-        UsageHistoryDocument(
-            deviceID: deviceID,
-            deviceName: deviceID,
-            updatedAt: Date(timeIntervalSince1970: updatedAt),
-            providers: providers
         )
     }
 
