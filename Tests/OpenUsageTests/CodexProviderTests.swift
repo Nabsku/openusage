@@ -519,6 +519,31 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertNil(provider.verifiedAccountIdentityKey)
     }
 
+    func testForeignCodexLogHomeCannotBePublishedUnderAuthenticatedAccount() async throws {
+        let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
+        let logHome = try CodexLogFixture.makeHome(files: ["sessions/foreign.jsonl": [
+            CodexLogFixture.turnContext(timestamp: "2026-02-20T14:00:00.000Z", model: "gpt-5.2"),
+            CodexLogFixture.tokenCount(timestamp: "2026-02-20T14:01:00.000Z",
+                                      last: CodexLogFixture.usage(input: 10, output: 5)),
+        ].joined(separator: "\n")])
+        let files = FakeFiles([
+            "~/.config/codex/auth.json": #"{"tokens":{"access_token":"a","account_id":"account-a"}}"#,
+            logHome.appendingPathComponent("auth.json").path:
+                #"{"tokens":{"access_token":"b","account_id":"account-b"}}"#,
+        ])
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8)))
+        let provider = CodexProvider(
+            authStore: CodexAuthStore(files: files, keychain: FakeKeychain()),
+            usageClient: CodexUsageClient(http: http), logUsageScanner: CodexLogFixture.scanner(home: logHome),
+            now: { now }, pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+        XCTAssertEqual(provider.verifiedAccountIdentityKey, "account-a")
+        XCTAssertFalse(provider.isAccountHistorySafeToExport)
+        XCTAssertNil(snapshot.usageHistory)
+    }
+
     func testNoUsageDataBadgeIsDroppedWhenLocalLogsHaveSpend() async throws {
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         // The live usage API returns nothing mappable (empty body -> no metric lines)...

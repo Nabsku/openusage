@@ -372,7 +372,9 @@ final class WidgetDataStore {
         if let reporter = provider as? any AccountIdentityReporting {
             let previousIdentity = providerIdentityKeys[providerID]?.lowercased()
             let verifiedIdentity = reporter.verifiedAccountIdentityKey?.lowercased()
-            if verifiedIdentity == nil || verifiedIdentity != previousIdentity {
+            if verifiedIdentity == nil || verifiedIdentity != previousIdentity
+                || !reporter.isAccountHistorySafeToExport
+            {
                 if localSnapshots.removeValue(forKey: providerID) != nil {
                     AppLog.warn(.config, "accounts: \(providerID) ownership changed; previous history discarded")
                 }
@@ -455,6 +457,12 @@ final class WidgetDataStore {
         where descriptor.scope == .machineLocal && isProviderEnabled(providerID) {
             if let history = localSnapshots[providerID]?.usageHistory {
                 if ProviderAccountID.families.contains(ProviderAccountID.family(of: providerID)) {
+                    if let reporter = providersByID[providerID] as? any AccountIdentityReporting,
+                       !reporter.isAccountHistorySafeToExport
+                    {
+                        AppLog.warn(.config, "sync: omitting account history with unverified log ownership")
+                        continue
+                    }
                     guard let identity = providerIdentityKeys[providerID] else {
                         AppLog.warn(.config, "sync: omitting unresolved account history for \(providerID)")
                         continue

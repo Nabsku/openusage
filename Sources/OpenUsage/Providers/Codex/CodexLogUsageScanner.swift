@@ -107,7 +107,7 @@ actor CodexLogUsageScanner {
     // MARK: - Discovery
 
     /// `CODEX_HOME` entries (comma-separated) when set, else `~/.codex` — same as ccusage.
-    private func codexHomes() -> [URL] {
+    func codexHomes() -> [URL] {
         if let raw = environment.value(for: "CODEX_HOME")?.trimmingCharacters(in: .whitespacesAndNewlines),
            !raw.isEmpty {
             return raw.split(separator: ",")

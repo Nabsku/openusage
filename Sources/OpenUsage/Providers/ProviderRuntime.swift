@@ -41,6 +41,11 @@ protocol ProviderRuntime: AnyObject {
 @MainActor
 protocol AccountIdentityReporting: AnyObject {
     var verifiedAccountIdentityKey: String? { get }
+    var isAccountHistorySafeToExport: Bool { get }
+}
+
+extension AccountIdentityReporting {
+    var isAccountHistorySafeToExport: Bool { true }
 }
 
 /// Run a blocking, `Sendable` credential load off the MainActor.

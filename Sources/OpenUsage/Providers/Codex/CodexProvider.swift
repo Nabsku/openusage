@@ -19,6 +19,7 @@ final class CodexProvider: ProviderRuntime, AccountIdentityReporting {
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
     private(set) var verifiedAccountIdentityKey: String?
+    private(set) var isAccountHistorySafeToExport = false
 
     init(
         authStore: CodexAuthStore = CodexAuthStore(),
@@ -147,8 +148,11 @@ final class CodexProvider: ProviderRuntime, AccountIdentityReporting {
         // the shared pricing store, merged with Codex usage that happened inside pi (attributed back
         // here). Both scans run on their scanner actors, off the main actor.
         let pricing = await pricing()
-        let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
-        let piScan = await PiUsageScanner.shared.scan(cardID: provider.id, now: now(), pricing: pricing)
+        isAccountHistorySafeToExport = await logRootsBelong(to: authState)
+        let nativeScan = isAccountHistorySafeToExport
+            ? await logUsageScanner.scan(now: now(), pricing: pricing) : nil
+        let piScan = isAccountHistorySafeToExport
+            ? await PiUsageScanner.shared.scan(cardID: provider.id, now: now(), pricing: pricing) : nil
         var usageHistory: ProviderUsageHistory?
         // Cancellation can land between the native and pi scans. Treat the pair as one unit so a
         // partial result cannot replace the last-good combined history in WidgetDataStore.
@@ -243,6 +247,21 @@ final class CodexProvider: ProviderRuntime, AccountIdentityReporting {
                 .caseInsensitiveCompare(identity) == .orderedSame
             else { throw CodexAuthError.tokenConflict }
         }
+    }
+
+    private func logRootsBelong(to state: CodexAuthState) async -> Bool {
+        guard let identity = state.accountIdentityKey else { return true }
+        for home in await logUsageScanner.codexHomes() {
+            let authPath = home.appendingPathComponent("auth.json").path
+            guard authStore.files.exists(authPath) else { continue }
+            guard authStore.loadAuth(at: authPath)?.accountIdentityKey?
+                .caseInsensitiveCompare(identity) == .orderedSame
+            else {
+                AppLog.warn(.config, "codex logs belong to another or unresolved account; history quarantined")
+                return false
+            }
+        }
+        return true
     }
 
     private func refreshAccessToken(authState: inout CodexAuthState, refreshToken: String) async throws -> String {
