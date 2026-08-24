@@ -454,6 +454,33 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(httpClient.requests.count, 1)
     }
 
+    @MainActor
+    func testDesktopOnlyFootprintTracksLogoutWithoutReadingSafeStorage() async throws {
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)],
+            requiresInteraction: true
+        )
+        let now = now
+        let provider = ClaudeProvider(authStore: ClaudeAuthStore(
+            environment: FakeEnvironment(), files: fixture.files, keychain: FakeKeychain(),
+            desktop: fixture.store, scope: .desktopOnly(organization: organization), now: { now }
+        ))
+        let configPath = home
+            .appendingPathComponent("Library/Application Support/Claude/config.json").path
+        let encryptedConfig = try XCTUnwrap(fixture.files.files[configPath])
+
+        let signedIn = await provider.hasLocalCredentials()
+        XCTAssertTrue(signedIn)
+        fixture.files.files.removeValue(forKey: configPath)
+        let signedOut = await provider.hasLocalCredentials()
+        XCTAssertFalse(signedOut)
+        fixture.files.files[configPath] = encryptedConfig
+        let restored = await provider.hasLocalCredentials()
+        XCTAssertTrue(restored)
+        XCTAssertTrue(fixture.keyReader.calls.isEmpty)
+    }
+
     private func makeFixture(
         activeOrganization: String,
         v2: [String: Any],

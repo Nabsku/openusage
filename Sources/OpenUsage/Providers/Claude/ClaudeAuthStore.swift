@@ -186,15 +186,14 @@ struct ClaudeAuthStore: Sendable {
     var desktop: ClaudeDesktopAuthStore
     var now: @Sendable () -> Date
     let scope: ClaudeCredentialScope
-    /// The `.standard` card's Desktop fallback pins to this org once extra Claude cards exist (the
-    /// default account's own org, parsed from its identity key) — an unpinned fallback could borrow
-    /// a Desktop login that belongs to one of the other cards, fetching that account's usage onto
-    /// the default card.
-    let standardDesktopOrganization: String?
-    /// Whether the `.standard` store may fall back to Desktop's *active* org when no org pin is
-    /// known. On by default (the historical single-account behavior); the catalog turns it OFF once
-    /// extra Claude account cards exist, so without a pin the fallback is disabled rather than blind.
-    let allowsUnpinnedStandardDesktopFallback: Bool
+    /// Account assembly owns this closed authorization; spend-root routing cannot widen it.
+    let desktopAccessPolicy: ClaudeDesktopAccessPolicy
+    /// The standard CLI store's unsuffixed keychain fallback is independent of Desktop routing.
+    let allowsUnscopedStandardKeychainFallback: Bool
+
+    var standardDesktopOrganization: String? { desktopAccessPolicy.organization }
+    /// Compatibility for direct auth-store callers; account-bound runtimes use the semantic name.
+    var allowsUnpinnedStandardDesktopFallback: Bool { allowsUnscopedStandardKeychainFallback }
 
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
@@ -202,8 +201,10 @@ struct ClaudeAuthStore: Sendable {
         keychain: KeychainAccessing = SecurityKeychainAccessor(),
         desktop: ClaudeDesktopAuthStore? = nil,
         scope: ClaudeCredentialScope = .standard,
+        desktopAccessPolicy: ClaudeDesktopAccessPolicy? = nil,
         standardDesktopOrganization: String? = nil,
         allowsUnpinnedStandardDesktopFallback: Bool = true,
+        allowsUnscopedStandardKeychainFallback: Bool? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.environment = environment
@@ -211,8 +212,17 @@ struct ClaudeAuthStore: Sendable {
         self.keychain = keychain
         self.desktop = desktop ?? ClaudeDesktopAuthStore(files: files, now: now)
         self.scope = scope
-        self.standardDesktopOrganization = standardDesktopOrganization?.nilIfEmpty?.lowercased()
-        self.allowsUnpinnedStandardDesktopFallback = allowsUnpinnedStandardDesktopFallback
+        if let desktopAccessPolicy {
+            self.desktopAccessPolicy = desktopAccessPolicy
+        } else if let organization = standardDesktopOrganization?.nilIfEmpty?.lowercased() {
+            self.desktopAccessPolicy = .pinned(organization)
+        } else {
+            self.desktopAccessPolicy = allowsUnpinnedStandardDesktopFallback
+                ? .activeOrganization
+                : .denied
+        }
+        self.allowsUnscopedStandardKeychainFallback = allowsUnscopedStandardKeychainFallback
+            ?? allowsUnpinnedStandardDesktopFallback
         self.now = now
     }
 
@@ -232,18 +242,16 @@ struct ClaudeAuthStore: Sendable {
         // scope), never a competing account source. Scoped cards are stricter: a `.configDir` card
         // never consults Desktop at all (that login belongs to another card), and a `.desktopOnly`
         // card consults nothing else — always pinned to its own org.
-        let desktopAllowed: Bool
-        var desktopOrganization: String?
+        let desktopAccess: ClaudeDesktopAccessPolicy
         switch scope {
         case .standard:
-            desktopAllowed = standardDesktopOrganization != nil || allowsUnpinnedStandardDesktopFallback
-            desktopOrganization = standardDesktopOrganization
+            desktopAccess = desktopAccessPolicy
         case .desktopOnly(let organization):
-            desktopAllowed = true
-            desktopOrganization = organization
+            desktopAccess = .pinned(organization)
         case .configDir:
-            desktopAllowed = false
+            desktopAccess = .denied
         }
+        let desktopAllowed = desktopAccess != .denied
         if forceDesktopFallback, !desktopAllowed {
             // Tell the provider there is no safe Desktop candidate so it preserves the original CLI
             // auth error instead of converting it to a generic "not logged in" result.
@@ -253,7 +261,10 @@ struct ClaudeAuthStore: Sendable {
             $0.hasUsableAccessToken && liveUsageAvailability($0) == .available
         }
         if desktopAllowed, forceDesktopFallback || !hasUsableCLILogin {
-            let result = desktop.load(allowInteraction: allowDesktopInteraction, organization: desktopOrganization)
+            let result = desktop.load(
+                allowInteraction: allowDesktopInteraction,
+                organization: desktopAccess.organization
+            )
             desktopStatus = result.status
             if let oauth = result.oauth {
                 stored.insert(ClaudeCredentialState(
@@ -286,12 +297,62 @@ struct ClaudeAuthStore: Sendable {
             return keychainServiceCandidates().contains {
                 keychain.genericPasswordExists(service: $0) == true
             }
-        case .desktopOnly(let organization):
-            // `allowInteraction: false` can never raise a dialog: a not-yet-granted Safe Storage key
-            // read comes back as `.permissionRequired`, which still proves a Desktop login exists.
-            let status = desktop.load(allowInteraction: false, organization: organization).status
-            return status == .available || status == .permissionRequired || status == .stale
+        case .desktopOnly:
+            // Assembly already established this account's organization from its Cowork state.
+            // Encrypted Desktop material is sufficient for seeding; decrypting it here would
+            // touch another app's Safe Storage item before the user explicitly refreshes.
+            return desktop.hasCredentialMaterial()
         }
+    }
+
+    /// Verify the identity attached to this exact credential source before a bound account card
+    /// reads or publishes anything. Credential files do not identify their owner, so the source's
+    /// own Claude state file is the authority; a missing or ambiguous state never gets guessed.
+    func matchesIdentity(_ expectedIdentityKey: String) -> Bool {
+        guard let expected = ClaudeIdentity(expectedIdentityKey) else { return false }
+        let identityPath: String
+
+        switch scope {
+        case .desktopOnly(let organization):
+            return expected.organization == organization.lowercased()
+
+        case .configDir(let path, _):
+            identityPath = "\(path)/.claude.json"
+
+        case .standard:
+            let configuredHome = claudeHomeOverride() ?? Self.defaultClaudeHome
+            guard !configuredHome.contains(",") else { return false }
+            let expandedHome = (configuredHome as NSString).expandingTildeInPath
+            let expandedDefault = (Self.defaultClaudeHome as NSString).expandingTildeInPath
+            identityPath = URL(fileURLWithPath: expandedHome).standardizedFileURL.path
+                == URL(fileURLWithPath: expandedDefault).standardizedFileURL.path
+                ? "\(configuredHome).json"
+                : "\(configuredHome)/.claude.json"
+        }
+
+        let text: String
+        do {
+            guard let stored = try files.readTextIfPresent(identityPath) else { return false }
+            text = stored
+        } catch {
+            AppLog.error(
+                LogTag.auth("claude"),
+                "couldn't verify the bound Claude account identity: \(error.localizedDescription)"
+            )
+            return false
+        }
+
+        guard let state = try? JSONDecoder().decode(
+                  DefaultAccountObserver.ClaudeStateFile.self,
+                  from: Data(text.utf8)
+              ),
+              let account = state.oauthAccount,
+              let observed = DefaultAccountObserver.claudeIdentityKey(account)
+        else {
+            return false
+        }
+        guard let identity = ClaudeIdentity(observed) else { return false }
+        return identity.matchesExactly(expected)
     }
 
     private func applyingEnvironmentToken(to stored: [ClaudeCredentialState]) -> [ClaudeCredentialState] {
@@ -486,7 +547,10 @@ struct ClaudeAuthStore: Sendable {
             return []
         case .standard:
             if let configDir = claudeHomeOverride() {
-                return ["\(base)-\(hashSuffix(configDir))", base]
+                let scoped = "\(base)-\(hashSuffix(configDir))"
+                // With multiple known logins, the unsuffixed item can belong to another
+                // account's default home. A config-dir login must never borrow it.
+                return allowsUnscopedStandardKeychainFallback ? [scoped, base] : [scoped]
             }
             return [base]
         }

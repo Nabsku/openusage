@@ -3,9 +3,6 @@ import Foundation
 
 @MainActor
 final class ClaudeProvider: ProviderRuntime {
-    /// The default card's identity. Extra account cards inject their own `Provider` with an
-    /// `@`-suffixed id and an account-derived display name; everything else about the runtime is
-    /// identical.
     static func makeProvider(id: String = "claude", displayName: String = "Claude") -> Provider {
         Provider(
             id: id,
@@ -25,6 +22,7 @@ final class ClaudeProvider: ProviderRuntime {
     let logUsageScanner: ClaudeLogUsageScanner
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
+    let expectedIdentityKey: String?
 
     /// Last successful live-usage result and a rate-limit cooldown, carried across refreshes (the provider
     /// is a long-lived singleton). `/api/oauth/usage` rate-limits aggressively, so on a 429 we serve the
@@ -42,7 +40,8 @@ final class ClaudeProvider: ProviderRuntime {
         usageClient: ClaudeUsageClient = ClaudeUsageClient(),
         logUsageScanner: ClaudeLogUsageScanner = ClaudeLogUsageScanner(),
         now: @escaping @Sendable () -> Date = Date.init,
-        pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() }
+        pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() },
+        expectedIdentityKey: String? = nil
     ) {
         self.provider = provider
         self.authStore = authStore
@@ -50,6 +49,7 @@ final class ClaudeProvider: ProviderRuntime {
         self.logUsageScanner = logUsageScanner
         self.now = now
         self.pricing = pricing
+        self.expectedIdentityKey = expectedIdentityKey
     }
 
     var widgetDescriptors: [WidgetDescriptor] {
@@ -74,9 +74,6 @@ final class ClaudeProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Scoped cards answer from footprints only (file existence / keychain attributes) so the
-        // every-launch seeding probe can never raise a keychain dialog for an account the user
-        // hasn't granted yet. The secret read happens on the first refresh.
         if authStore.scope != .standard {
             return await loadOffMainActor { [authStore] in authStore.hasCredentialFootprint() }
         }
@@ -102,12 +99,22 @@ final class ClaudeProvider: ProviderRuntime {
         forceDesktopFallback: Bool,
         previousFallbackError: ClaudeAuthError?
     ) async -> ProviderSnapshot {
+        guard await sourceStillBelongsToAccount() else {
+            clearLiveUsageCache()
+            AppLog.warn(LogTag.auth("claude"), "account-bound credential source no longer matches its card")
+            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.credentialsChanged)
+        }
+
         let allowDesktopInteraction = ProviderRefreshContext.isManual
         let credentialLoad = await loadOffMainActor { [authStore] in
             authStore.loadCredentialSet(
                 allowDesktopInteraction: allowDesktopInteraction,
                 forceDesktopFallback: forceDesktopFallback
             )
+        }
+        guard await sourceStillBelongsToAccount() else {
+            clearLiveUsageCache()
+            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.credentialsChanged)
         }
         let storedCandidates = credentialLoad.candidates
         let candidates = storedCandidates.filter {
@@ -159,6 +166,10 @@ final class ClaudeProvider: ProviderRuntime {
                 mapped: ClaudeMappedUsage(plan: nil, lines: []),
                 warning: error.localizedDescription
             )
+            guard await sourceStillBelongsToAccount() else {
+                clearLiveUsageCache()
+                return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.credentialsChanged)
+            }
             guard let history = snapshot.usageHistory,
                   history.series.daily.contains(where: {
                       $0.totalTokens > 0 || ($0.costUSD ?? 0) > 0
@@ -276,7 +287,9 @@ final class ClaudeProvider: ProviderRuntime {
             warning = fallbackWarning
         }
 
-        return await snapshotWithLocalUsage(mapped: mapped, warning: warning)
+        let snapshot = await snapshotWithLocalUsage(mapped: mapped, warning: warning)
+        guard await sourceStillBelongsToAccount() else { throw ClaudeAuthError.credentialsChanged }
+        return snapshot
     }
 
     private func snapshotWithLocalUsage(
@@ -289,6 +302,9 @@ final class ClaudeProvider: ProviderRuntime {
         // Both scans run on their scanner actors, off the main actor, and do not require an OAuth login.
         let pricing = await pricing()
         let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
+        // pi's logs name the Claude family, never an account id. Attribute them only to the
+        // runtime that currently owns the default credential source, even when that account's
+        // stable card id is hashed and the original bare-id account has moved elsewhere.
         let piScan: LogUsageScan?
         if authStore.scope == .standard {
             piScan = await PiUsageScanner.shared.scan(cardID: "claude", now: now(), pricing: pricing)
@@ -385,6 +401,7 @@ final class ClaudeProvider: ProviderRuntime {
             authStore.credentialGeneration(forceDesktopFallback: forceDesktopGeneration)
         }
         guard currentGeneration == expectedGeneration else { throw ClaudeAuthError.credentialsChanged }
+        guard await sourceStillBelongsToAccount() else { throw ClaudeAuthError.credentialsChanged }
 
         // 429 can come back from either attempt; the helper hands both through unchanged. Start a cooldown
         // (respecting Retry-After) and serve the last-good usage rather than a bare badge.
@@ -420,8 +437,19 @@ final class ClaudeProvider: ProviderRuntime {
         let fingerprint = Self.credentialFingerprint(credentials)
         guard cachedCredentialFingerprint != fingerprint else { return }
         cachedCredentialFingerprint = fingerprint
+        clearLiveUsageCache()
+    }
+
+    private func clearLiveUsageCache() {
         lastGoodUsage = nil
         rateLimitedUntil = nil
+    }
+
+    private func sourceStillBelongsToAccount() async -> Bool {
+        guard let expectedIdentityKey else { return true }
+        return await loadOffMainActor { [authStore] in
+            authStore.matchesIdentity(expectedIdentityKey)
+        }
     }
 
     private static func credentialFingerprint(_ credentials: ClaudeOAuth) -> Data {
@@ -475,8 +503,12 @@ final class ClaudeProvider: ProviderRuntime {
         // rather than fail the live fetch.
         let persisted: Bool
         do {
+            let expectedIdentityKey = expectedIdentityKey
             guard try await Task.detached(priority: .utility, operation: { [authStore, state] in
-                try authStore.save(state, ifUnchanged: expectedGeneration)
+                if let expectedIdentityKey, !authStore.matchesIdentity(expectedIdentityKey) {
+                    throw ClaudeAuthError.credentialsChanged
+                }
+                return try authStore.save(state, ifUnchanged: expectedGeneration)
             }).value else {
                 throw ClaudeAuthError.credentialsChanged
             }
