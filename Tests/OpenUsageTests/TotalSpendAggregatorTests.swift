@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import OpenUsage
 
@@ -175,5 +176,31 @@ final class TotalSpendAggregatorTests: XCTestCase {
         XCTAssertTrue(total.projection(for: .cost).isEmpty)
         XCTAssertTrue(total.projection(for: .tokens).isEmpty)
         XCTAssertTrue(total.projection(for: .costPerMtok).isEmpty)
+    }
+}
+
+final class TotalSpendPaletteTests: XCTestCase {
+    func testExistingBrandColorsRemainStable() {
+        XCTAssertEqual(TotalSpendPalette.color(for: "claude"),
+                       Color(red: 222.0 / 255, green: 115.0 / 255, blue: 86.0 / 255))
+        XCTAssertEqual(TotalSpendPalette.color(for: "codex"),
+                       Color(red: 16.0 / 255, green: 163.0 / 255, blue: 127.0 / 255))
+        XCTAssertNil(TotalSpendPalette.accountComponents(for: "claude"))
+    }
+
+    func testAccountAndRemoteAliasShareOneDistinctBrandShade() throws {
+        let first = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@11111111"))
+        let second = try XCTUnwrap(TotalSpendPalette.accountComponents(for: "claude@22222222"))
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(first, TotalSpendPalette.accountComponents(for: "claude@peer-11111111"))
+        XCTAssertEqual(first, TotalSpendPalette.accountComponents(for: "claude@11111111"))
+        XCTAssertTrue(first.hue <= 0.15 || first.hue >= 0.90)
+        XCTAssertTrue((0.62...0.94).contains(first.brightness))
+    }
+
+    func testUnknownProvidersKeepTheirFallbackColor() {
+        XCTAssertEqual(TotalSpendPalette.color(for: "mystery-provider"),
+                       Color(red: 162.0 / 255, green: 132.0 / 255, blue: 94.0 / 255))
+        XCTAssertNil(TotalSpendPalette.accountComponents(for: "cursor@ab12cd34"))
     }
 }
