@@ -63,6 +63,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertTrue(remapped.histories.isEmpty)
         XCTAssertEqual(remapped.remoteOnly.count, 1)
         XCTAssertEqual(remapped.remoteOnly.first?.family, "claude")
+        XCTAssertEqual(remapped.remoteOnly.first?.deviceName, "Mac mini")
         XCTAssertEqual(remapped.remoteOnly.first?.cardID,
                        ProviderAccountID.make(family: "claude", identityKey: "uuid-other|org-x"))
     }
@@ -169,8 +170,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
 
         XCTAssertEqual(dataStore.remoteOnlySpend.count, 1)
         let entry = dataStore.remoteOnlySpend[0]
-        XCTAssertEqual(entry.provider.displayName,
-                       ProviderAccountID.make(family: "claude", identityKey: "uuid-other|org-x"))
+        XCTAssertEqual(entry.provider.displayName, "Claude · Mac mini")
 
         let total = TotalSpendAggregator.total(
             for: .today,

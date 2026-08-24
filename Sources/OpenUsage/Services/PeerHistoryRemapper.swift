@@ -25,6 +25,7 @@ enum PeerHistoryRemapper {
         var identityKey: String
         var family: String
         var cardID: String
+        var deviceName: String
         var histories: [ProviderUsageHistory]
     }
 
@@ -96,6 +97,7 @@ enum PeerHistoryRemapper {
                     identityKey: identity,
                     family: family,
                     cardID: ProviderAccountID.make(family: family, identityKey: identity),
+                    deviceName: document.deviceName,
                     histories: []
                 )
                 entry.histories.append(history)

@@ -530,7 +530,7 @@ final class WidgetDataStore {
 
             let provider = Provider(
                 id: "\(entry.family)@peer-\(ProviderAccountID.hash8(entry.identityKey))",
-                displayName: entry.cardID,
+                displayName: "\(entry.family.capitalized) · \(entry.deviceName)",
                 icon: familyProvider.icon
             )
             let empty = ProviderSnapshot(
