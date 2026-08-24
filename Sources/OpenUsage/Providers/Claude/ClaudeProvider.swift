@@ -252,8 +252,7 @@ final class ClaudeProvider: ProviderRuntime {
         var state = initialState
         if state.source == .desktop {
             guard let currentUser = authStore.desktop.lastKnownAccountUUID(),
-                  let identityKey = authStore.expectedIdentityKey ?? currentUser,
-                  let account = ClaudeIdentity(identityKey),
+                  let account = ClaudeIdentity(authStore.expectedIdentityKey ?? currentUser),
                   account.user.caseInsensitiveCompare(currentUser) == .orderedSame,
                   let accessToken = state.oauth.accessToken,
                   let organization = state.desktopOrganization,
