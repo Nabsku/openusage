@@ -226,6 +226,29 @@ final class PeerHistoryIdentityTests: XCTestCase {
         }
     }
 
+    func testKeychainCodexAccountSwitchStaysQuarantinedAcrossColdRelaunches() async {
+        let defaults = makeScratchDefaults("CodexColdAccountSwitch")
+        let codex = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))
+        let descriptor = WidgetDescriptor.usageTrend(provider: codex)
+            .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test")
+        let rollout = history(day: "2026-07-16", tokens: 10, cost: 1)
+
+        for (identity, shouldExport) in [("account-a", true), ("account-b", false), ("account-b", false)] {
+            let runtime = AccountReportingRuntime(
+                provider: codex, snapshot: snapshot(providerID: "codex", history: rollout), identity: identity
+            )
+            let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "cold-codex", ttl: 600)
+            let store = WidgetDataStore(
+                registry: WidgetRegistry(providers: [codex], descriptors: [descriptor]),
+                providers: [runtime], cache: cache, defaults: defaults
+            )
+
+            _ = await store.refresh(providerID: "codex", force: true)
+            let document = store.localHistoryDocument(deviceID: "this-mac", deviceName: "This Mac")
+            XCTAssertEqual(document.providers["codex"] != nil, shouldExport)
+        }
+    }
+
     func testLocalDocumentPublishesAccountCardsWithIdentities() {
         let registry = makeRegistry()
         // Preload the cache; the store's init adopts cached snapshots as its local set. The entries

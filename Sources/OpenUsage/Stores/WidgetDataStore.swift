@@ -52,6 +52,7 @@ final class WidgetDataStore {
     private static let meterStyleKey = "meterStyle"
     private static let resetDisplayModeKey = "resetDisplayMode"
     private static let alwaysShowPacingKey = "alwaysShowPacing"
+    private static let verifiedAccountIdentitiesKey = "openusage.verifiedProviderAccountIdentities.v1"
     /// How long a provider that just failed is skipped before the loop will probe it again. A failed
     /// refresh isn't cached, so — unlike a success, which the snapshot cache gates for an interval —
     /// nothing else stops the loop from re-probing a broken provider (logged-out Devin/Grok especially)
@@ -176,6 +177,19 @@ final class WidgetDataStore {
         var knownIdentities = knownAccountIdentitiesByFamily.mapValues { Set($0.map { $0.lowercased() }) }
         for (cardID, identity) in providerIdentityKeys {
             knownIdentities[ProviderAccountID.family(of: cardID), default: []].insert(identity.lowercased())
+        }
+        let verifiedIdentities = defaults.dictionary(forKey: Self.verifiedAccountIdentitiesKey)
+            as? [String: [String]] ?? [:]
+        for (family, identities) in verifiedIdentities {
+            knownIdentities[family, default: []].formUnion(identities.map { $0.lowercased() })
+        }
+        for provider in registry.providers {
+            let family = ProviderAccountID.family(of: provider.id)
+            if ProviderAccountID.families.contains(family),
+               let identity = cache.producedByIdentityKey(providerID: provider.id)
+            {
+                knownIdentities[family, default: []].insert(identity.lowercased())
+            }
         }
         self.knownAccountIdentitiesByFamily = knownIdentities
         self.resolveDisplayName = resolveDisplayName
@@ -381,8 +395,18 @@ final class WidgetDataStore {
             }
             providerIdentityKeys[providerID] = verifiedIdentity
             if let verifiedIdentity {
-                knownAccountIdentitiesByFamily[ProviderAccountID.family(of: providerID), default: []]
-                    .insert(verifiedIdentity)
+                let family = ProviderAccountID.family(of: providerID)
+                knownAccountIdentitiesByFamily[family, default: []].insert(verifiedIdentity)
+                var persisted = defaults.dictionary(forKey: Self.verifiedAccountIdentitiesKey)
+                    as? [String: [String]] ?? [:]
+                var verified = Set(persisted[family, default: []].map { $0.lowercased() })
+                if let cached = cache.producedByIdentityKey(providerID: providerID) {
+                    verified.insert(cached.lowercased())
+                }
+                if verified.insert(verifiedIdentity).inserted || persisted[family] == nil {
+                    persisted[family] = verified.sorted()
+                    defaults.set(persisted, forKey: Self.verifiedAccountIdentitiesKey)
+                }
             }
         }
         // A provider can refresh its live limits successfully while its optional local log/CSV scan
