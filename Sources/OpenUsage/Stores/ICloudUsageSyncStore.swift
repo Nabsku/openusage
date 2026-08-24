@@ -190,6 +190,7 @@ final class ICloudUsageSyncStore {
         didSet {
             guard enabled != oldValue else { return }
             defaults.set(enabled, forKey: Self.enabledKey)
+            activationTask?.cancel()
             activationTask = Task { [weak self] in await self?.applyEnabledChange() }
         }
     }

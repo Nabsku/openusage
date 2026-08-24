@@ -88,6 +88,32 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         XCTAssertNil(sync.serviceError, "cancellation is an intentional shutdown, not an iCloud failure")
     }
 
+    func testRapidEnableChangesCannotLeaveAnOrphanedWriterAfterShutdown() async throws {
+        let defaults = makeDefaults("orphaned-activation")
+        let deviceIDStore = MemoryDeviceIDStore()
+        let deviceID = UUID().uuidString.lowercased()
+        try deviceIDStore.writeDeviceID(deviceID)
+        let currentDocument = UsageHistoryDocument(
+            deviceID: deviceID, deviceName: "Current Account", updatedAt: Date(), providers: [:]
+        )
+        let fileStore = RecordingHistoryFileStore(seedDocuments: [currentDocument])
+        let sync = makeSync(defaults, fileStore: fileStore, deviceIDStore: deviceIDStore)
+
+        await fileStore.holdNextWrite()
+        sync.enabled = true
+        try await waitUntil { await fileStore.writeInFlight }
+        sync.enabled = false
+        sync.enabled = true
+        sync.shutdownForAccountGraphReload()
+        await fileStore.releaseWrite()
+        try await waitUntil { !(await fileStore.writeInFlight) && !sync.isSyncing }
+
+        let documents = await fileStore.documents
+        let deletedDeviceIDs = await fileStore.deletedDeviceIDs
+        XCTAssertEqual(documents, [currentDocument])
+        XCTAssertTrue(deletedDeviceIDs.isEmpty)
+    }
+
     func testCanceledCoordinatedAccessorCannotOverwriteReplacementAccountDocument() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("openusage-sync-coordination-\(UUID().uuidString)", isDirectory: true)
@@ -178,9 +204,8 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
 
         await fileStore.releaseWrite()
         try await waitUntil {
-            let deletedCount = await fileStore.deletedDeviceIDs.filter { $0 == sync.deviceID }.count
             let writeInFlight = await fileStore.writeInFlight
-            return deletedCount >= 2 && !writeInFlight && !sync.isSyncing
+            return !writeInFlight && !sync.isSyncing
         }
 
         let documents = await fileStore.documents
