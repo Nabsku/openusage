@@ -409,6 +409,14 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             desktopAccessPolicy: .denied, allowsUnscopedStandardKeychainFallback: false
         )
         XCTAssertTrue(protected.loadCredentialCandidates().isEmpty)
+
+        let ownLogin = ClaudeAuthStore(
+            files: FakeFiles(["~/.claude/.credentials.json":
+                #"{"claudeAiOauth":{"accessToken":"own-account"}}"#]),
+            keychain: FakeKeychain(#"{"claudeAiOauth":{"accessToken":"other-account"}}"#),
+            desktopAccessPolicy: .denied, allowsUnscopedStandardKeychainFallback: false
+        )
+        XCTAssertEqual(ownLogin.loadCredentialCandidates().map(\.oauth.accessToken), ["own-account"])
     }
 
     func testUnreadableKnownDefaultKeepsItsOwnershipWhileScanningVerifiedConfigAccounts() throws {

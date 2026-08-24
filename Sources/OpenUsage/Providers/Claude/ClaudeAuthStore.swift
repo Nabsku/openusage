@@ -385,7 +385,7 @@ struct ClaudeAuthStore: Sendable {
         if case .standard = scope, expectedIdentityKey == nil,
            desktopAccessPolicy == .denied, !allowsUnscopedStandardKeychainFallback
         {
-            return []
+            return loadFileCredentials().map { [$0] } ?? []
         }
         var candidates: [ClaudeCredentialState] = []
         if let keychain = loadKeychainCredentials() { candidates.append(keychain) }
