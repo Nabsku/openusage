@@ -386,7 +386,6 @@ struct ProviderAccountAssembly {
             }
         }
 
-        let observedDefaultIdentity = identityKeys["claude"]
         let familiesWithoutDefault = Set(outcomes.compactMap { entry -> String? in
             switch entry.outcome {
             case .absent:

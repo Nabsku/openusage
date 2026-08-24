@@ -222,10 +222,15 @@ final class ProviderAccountsStore {
                 var record = updated[index]
                 if record.identityKey.caseInsensitiveCompare(observation.identityKey) != .orderedSame {
                     var aliases = Set(record.identityAliases ?? [])
-                    aliases.insert(record.identityKey.lowercased())
-                    aliases.remove(observation.identityKey.lowercased())
+                    let preservesQualifiedIdentity = observation.family == "claude"
+                        && ClaudeIdentity(record.identityKey)?.organization != nil
+                        && ClaudeIdentity(observation.identityKey)?.organization == nil
+                    aliases.insert((preservesQualifiedIdentity ? observation.identityKey : record.identityKey).lowercased())
+                    if !preservesQualifiedIdentity {
+                        aliases.remove(observation.identityKey.lowercased())
+                        record.identityKey = observation.identityKey.lowercased()
+                    }
                     record.identityAliases = aliases.sorted()
-                    record.identityKey = observation.identityKey.lowercased()
                 }
                 record.label = observation.label ?? record.label
                 record.sources = observation.sources + record.sources.filter { !$0.kind.isKnown }
