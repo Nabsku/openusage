@@ -62,14 +62,21 @@ enum FirstRunSeeder {
         logPrefix: String,
         probeVerb: String = "probing"
     ) -> Task<Void, Never> {
-        let fallback = fallbackProviderIDs.intersection(Set(providers.map(\.provider.id)))
+        let providerIDs = Set(providers.map(\.provider.id))
+        let fallback = fallbackProviderIDs.intersection(providerIDs)
         enablement.seedEnabledProviders(fallback)
+        enablement.markProviderDetectionPending(providerIDs)
         AppLog.info(.config, "\(logPrefix): seeded providers \(fallback.sorted()); \(probeVerb) local credentials")
         return Task {
             let detected = await detectLocalProviders(providers)
+            guard !Task.isCancelled else { return }
+            defer { enablement.finishProviderDetection(providerIDs) }
             AppLog.info(.config, "\(logPrefix): detected credentials for \(detected.sorted())")
             guard enablement.enabledIDs == fallback, !detected.isEmpty else { return }
-            enablement.seedEnabledProviders(detected)
+            let honoringUserChoices = detected.intersection(enablement.pendingDetectionIDs)
+                .union(fallback.subtracting(enablement.pendingDetectionIDs))
+            guard !honoringUserChoices.isEmpty else { return }
+            enablement.seedEnabledProviders(honoringUserChoices)
         }
     }
 
