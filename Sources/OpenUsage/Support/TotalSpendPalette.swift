@@ -41,14 +41,12 @@ enum TotalSpendPalette {
         let brightness: Double
     }
 
-    /// Remote-only aliases normalize to their eventual local account ID, keeping their color stable.
     static func accountComponents(for providerID: String) -> AccountColorComponents? {
         guard let separator = providerID.firstIndex(of: "@"),
               let brandHex = accountBrandHex[String(providerID[..<separator])]
         else { return nil }
 
-        var accountKey = String(providerID[providerID.index(after: separator)...]).lowercased()
-        if accountKey.hasPrefix("peer-") { accountKey.removeFirst("peer-".count) }
+        let accountKey = String(providerID[providerID.index(after: separator)...]).lowercased()
         guard !accountKey.isEmpty else { return nil }
 
         var hash: UInt64 = 0xcbf29ce484222325

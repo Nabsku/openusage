@@ -84,13 +84,29 @@ struct ProviderAccountRecord: Codable, Equatable, Sendable {
     /// from good). Never contains `customLabel` — this is what gets baked into the launch
     /// `Provider`, and baking a rename there is how stale-name bugs are born.
     var derivedDisplayName: String {
-        guard ProviderAccountID.isAccountCard(id) else { return family.capitalized }
-        guard let label = label?.nilIfEmpty else { return id }
+        derivedDisplayName(identifyingBareAccount: false)
+    }
+
+    func derivedDisplayName(identifyingBareAccount: Bool) -> String {
+        guard ProviderAccountID.isAccountCard(id) || identifyingBareAccount else {
+            return family.capitalized
+        }
+        guard let label = label?.nilIfEmpty else {
+            return ProviderAccountID.isAccountCard(id)
+                ? id : "\(family.capitalized) — \(ProviderAccountID.hash8(identityKey).prefix(4))"
+        }
         // Labels are our own "email (Org Name)" format — prefer the org for a short card title.
         if label.hasSuffix(")"), let open = label.lastIndex(of: "(") {
             let org = label[label.index(after: open)..<label.index(before: label.endIndex)]
                 .trimmingCharacters(in: .whitespaces)
-            if !org.isEmpty { return "\(family.capitalized) — \(org)" }
+            if !org.isEmpty {
+                let email = label[..<open].trimmingCharacters(in: .whitespaces)
+                let personalNames = ["\(email)'s Organization", "\(email)’s Organization"]
+                let name = personalNames.contains {
+                    $0.caseInsensitiveCompare(org) == .orderedSame
+                } ? "Personal" : org
+                return "\(family.capitalized) — \(name)"
+            }
         }
         return "\(family.capitalized) — \(label)"
     }
@@ -201,22 +217,47 @@ final class ProviderAccountsStore {
         return records
     }
 
-    /// The resolved card title for a card id, or `nil` when the card has no account record (a
-    /// non-account provider keeps its static `Provider.displayName`). The lookup half of the one
-    /// name resolver — see `ProviderAccountRecord.resolvedDisplayName`.
+    func record(for cardID: String) -> ProviderAccountRecord? {
+        records.first { $0.id == cardID }
+    }
+
+    func runtimeRecord(for cardID: String) -> ProviderAccountRecord? {
+        if cardID == "codex" { return defaultBadgeHolder(family: "codex") }
+        return record(for: cardID)
+    }
+
+    func derivedDisplayName(cardID: String) -> String? {
+        guard let record = runtimeRecord(for: cardID) else { return nil }
+        let siblings = records.filter { $0.family == record.family && !$0.removedTombstone }
+        let identifyBareAccount = siblings.count > 1
+        let proposed = record.derivedDisplayName(identifyingBareAccount: identifyBareAccount)
+        let collides = siblings.contains { sibling in
+            guard sibling.id != record.id else { return false }
+            let siblingName = sibling.customLabel?.nilIfEmpty
+                ?? sibling.derivedDisplayName(identifyingBareAccount: identifyBareAccount)
+            return siblingName == proposed
+        }
+        return collides ? "\(proposed) · \(ProviderAccountID.hash8(record.identityKey).prefix(4))" : proposed
+    }
+
     func resolvedDisplayName(cardID: String) -> String? {
-        records.first { $0.id == cardID }?.resolvedDisplayName
+        guard let record = runtimeRecord(for: cardID) else { return nil }
+        return record.customLabel?.nilIfEmpty ?? derivedDisplayName(cardID: cardID)
     }
 
     /// Card id → resolved title for every record — the map the CLI/API boundary applies to its
     /// snapshots (`LocalUsageAPI.State.resolvingDisplayNames`).
     var resolvedDisplayNamesByCardID: [String: String] {
-        Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0.resolvedDisplayName) })
+        Dictionary(uniqueKeysWithValues: records.compactMap { record in
+            resolvedDisplayName(cardID: record.id).map { (record.id, $0) }
+        })
     }
 
     /// Stores a user rename for a card; `nil` or blank clears it back to the derived name.
     func rename(cardID: String, to name: String?) {
-        guard let index = records.firstIndex(where: { $0.id == cardID }) else { return }
+        guard let record = runtimeRecord(for: cardID),
+              let index = records.firstIndex(where: { $0.id == record.id })
+        else { return }
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         guard records[index].customLabel != trimmed else { return }
         records[index].customLabel = trimmed

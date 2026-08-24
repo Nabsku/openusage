@@ -215,11 +215,11 @@ private struct CardNameSection: View {
     }
 
     private var record: ProviderAccountRecord? {
-        container.accounts.records.first { $0.id == providerID }
+        container.accounts.runtimeRecord(for: providerID)
     }
 
     private var placeholder: String {
-        record?.derivedDisplayName ?? ""
+        container.accounts.derivedDisplayName(cardID: providerID) ?? ""
     }
 
     private func commit() {

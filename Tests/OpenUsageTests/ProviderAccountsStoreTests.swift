@@ -171,6 +171,64 @@ final class ProviderAccountsStoreTests: XCTestCase {
         XCTAssertEqual(records[0].customLabel, "Work", "rescans update the label but never the rename")
     }
 
+    func testCodexRuntimeNameFollowsTheCurrentOwnerWithoutOverwritingOtherRenames() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let original = defaultHomeObservation(family: "codex", identityKey: "acct-a", label: "alice@example.com")
+        let replacement = defaultHomeObservation(family: "codex", identityKey: "acct-b", label: "bob@example.com")
+
+        store.reconcile(with: [original])
+        store.rename(cardID: "codex", to: "Alice")
+        store.reconcile(with: [replacement])
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "codex"), "Codex — bob@example.com")
+
+        store.rename(cardID: "codex", to: "Bob")
+        XCTAssertEqual(store.resolvedDisplayNamesByCardID["codex"], "Bob")
+        XCTAssertEqual(store.record(for: "codex")?.customLabel, "Alice")
+
+        store.reconcile(with: [original])
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "codex"), "Alice")
+        XCTAssertEqual(store.records.first { $0.identityKey == "acct-b" }?.customLabel, "Bob")
+    }
+
+    func testMultipleClaudeAccountsImmediatelyIdentifyPersonalAndOrganizationCards() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude", identityKey: "personal",
+                label: "rob@sunstory.com (rob@sunstory.com's Organization)"
+            ),
+            .init(
+                family: "claude", identityKey: "work", label: "rob@sunstory.com (SUNSTORY)",
+                sources: [.init(kind: .configDir, anchor: "/Users/dev/.claude-work", holdsDefaultSource: false)]
+            ),
+        ])
+
+        let workID = ProviderAccountID.make(family: "claude", identityKey: "work")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "Claude — Personal")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: workID), "Claude — SUNSTORY")
+    }
+
+    func testMatchingOrganizationNamesReceiveStableIdentityDisambiguators() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(family: "claude", identityKey: "acct-a", label: "a@example.com (SUNSTORY)"),
+            .init(
+                family: "claude", identityKey: "acct-b", label: "b@example.com (SUNSTORY)",
+                sources: [.init(kind: .configDir, anchor: "/Users/dev/.claude-work", holdsDefaultSource: false)]
+            ),
+        ])
+
+        let otherID = ProviderAccountID.make(family: "claude", identityKey: "acct-b")
+        XCTAssertEqual(
+            store.resolvedDisplayName(cardID: "claude"),
+            "Claude — SUNSTORY · \(ProviderAccountID.hash8("acct-a").prefix(4))"
+        )
+        XCTAssertEqual(
+            store.resolvedDisplayName(cardID: otherID),
+            "Claude — SUNSTORY · \(ProviderAccountID.hash8("acct-b").prefix(4))"
+        )
+    }
+
     func testFamilyHelperSplitsCardIDs() {
         XCTAssertEqual(ProviderAccountID.family(of: "claude"), "claude")
         XCTAssertEqual(ProviderAccountID.family(of: "claude@ab12cd34"), "claude")

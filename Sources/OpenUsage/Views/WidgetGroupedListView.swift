@@ -37,7 +37,10 @@ struct WidgetGroupedListView: View {
         .onPreferenceChange(ReorderFramePreferenceKey.self) { frameStore.frames = $0 }
         .animation(Motion.spring, value: layout.displayGroups.map(\.provider.id))
         .alert("Rename Card", isPresented: isRenamePresented) {
-            TextField("Name", text: $renameDraft)
+            TextField(
+                renameCardID.flatMap { container.accounts.derivedDisplayName(cardID: $0) } ?? "Name",
+                text: $renameDraft
+            )
             Button("Rename") {
                 if let renameCardID {
                     // A cleared field resets the card back to its derived name.
@@ -93,8 +96,7 @@ struct WidgetGroupedListView: View {
             // whose identity has been observed at least once.
             if container.canRename(group.provider.id) {
                 Button("Rename…") {
-                    renameDraft = container.accounts.records
-                        .first { $0.id == group.provider.id }?.customLabel ?? ""
+                    renameDraft = container.accounts.runtimeRecord(for: group.provider.id)?.customLabel ?? ""
                     renameCardID = group.provider.id
                 }
             }

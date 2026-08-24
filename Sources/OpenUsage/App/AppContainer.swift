@@ -248,7 +248,7 @@ final class AppContainer {
     /// Whether the card has an account record a rename can attach to (accounts-model families only,
     /// and only once the account's identity has been observed at least once).
     func canRename(_ providerID: String) -> Bool {
-        accounts.records.contains { $0.id == providerID }
+        accounts.runtimeRecord(for: providerID) != nil
     }
 
     /// Re-runs first-launch credential detection on demand — the enablement half of the Customize
