@@ -594,7 +594,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         let assembly = ProviderAccountAssembly.make(
             observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork,
-            hasDesktopCredentialMaterial: { true }
+            hasDesktopCredentialMaterial: { _ in true }
         )
 
         XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
@@ -620,7 +620,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         let assembly = ProviderAccountAssembly.make(
             observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork,
-            hasDesktopCredentialMaterial: { true }
+            hasDesktopCredentialMaterial: { _ in true }
         )
 
         let card = try XCTUnwrap(assembly.claudeCards.first)
@@ -696,7 +696,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         let assembly = ProviderAccountAssembly.make(
             observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork,
-            hasDesktopCredentialMaterial: { true }
+            hasDesktopCredentialMaterial: { _ in true }
         )
 
         XCTAssertEqual(assembly.claudeCards.count, 1)

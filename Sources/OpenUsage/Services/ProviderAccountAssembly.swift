@@ -130,8 +130,10 @@ struct ProviderAccountAssembly {
         families: Set<String> = ProviderAccountID.families,
         claudeDiscovery: ClaudeConfigDirDiscovery? = nil,
         coworkDiscovery: ClaudeCoworkDiscovery? = nil,
-        hasDesktopCredentialMaterial: @Sendable () -> Bool = {
-            ClaudeDesktopAuthStore().hasCredentialMaterial()
+        hasDesktopCredentialMaterial: @Sendable (String) -> Bool = { expectedUser in
+            let desktop = ClaudeDesktopAuthStore()
+            return desktop.hasCredentialMaterial()
+                && desktop.lastKnownAccountUUID()?.caseInsensitiveCompare(expectedUser) == .orderedSame
         }
     ) -> ProviderAccountAssembly {
         var identityKeys: [String: String] = [:]
@@ -360,7 +362,8 @@ struct ProviderAccountAssembly {
                     AppLog.info(.config, "discovery: cowork account \(ProviderAccountID.make(family: "claude", identityKey: identityKey)) has no organization pin → skipped Desktop-backed card")
                     continue
                 }
-                guard hasDesktopCredentialMaterial(),
+                guard let user = ClaudeIdentity(identityKey)?.user,
+                      hasDesktopCredentialMaterial(user),
                       desktopPolicy.access(for: identityKey, allowsActiveOrganization: false)
                           == .pinned(organization)
                 else {

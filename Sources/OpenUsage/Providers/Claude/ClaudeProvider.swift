@@ -251,8 +251,10 @@ final class ClaudeProvider: ProviderRuntime {
     ) async throws -> ProviderSnapshot {
         var state = initialState
         if state.source == .desktop {
-            guard let identityKey = authStore.expectedIdentityKey ?? authStore.desktop.lastKnownAccountUUID(),
+            guard let currentUser = authStore.desktop.lastKnownAccountUUID(),
+                  let identityKey = authStore.expectedIdentityKey ?? currentUser,
                   let account = ClaudeIdentity(identityKey),
+                  account.user.caseInsensitiveCompare(currentUser) == .orderedSame,
                   let accessToken = state.oauth.accessToken,
                   let organization = state.desktopOrganization,
                   account.organization.map({

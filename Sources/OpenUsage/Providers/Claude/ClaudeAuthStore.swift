@@ -141,9 +141,10 @@ struct ClaudeAuthStore: Sendable {
         case .configDir(let path, _):
             identityPath = "\(path)/.claude.json"
         case .desktopOnly(let organization):
-            guard let separator = expectedIdentityKey.firstIndex(of: "|") else { return false }
-            return expectedIdentityKey[expectedIdentityKey.index(after: separator)...]
-                .caseInsensitiveCompare(organization) == .orderedSame
+            guard let expected = ClaudeIdentity(expectedIdentityKey),
+                  expected.organization?.caseInsensitiveCompare(organization) == .orderedSame
+            else { return false }
+            return desktop.lastKnownAccountUUID()?.caseInsensitiveCompare(expected.user) == .orderedSame
         case .standard:
             let home = claudeHomeOverride() ?? Self.defaultClaudeHome
             guard !home.contains(",") else { return false }

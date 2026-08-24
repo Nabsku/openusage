@@ -18,6 +18,7 @@ final class ClaudeDesktopOwnershipTests: XCTestCase {
         defaultAccount: Account?,
         desktopAccounts: [Account],
         hasDesktopMaterial: Bool = true,
+        desktopUser: String? = nil,
         timeBudget: TimeInterval = 3
     ) -> ProviderAccountAssembly {
         let suiteName = "OpenUsageTests.DesktopOwnership.\(UUID().uuidString)"
@@ -42,7 +43,11 @@ final class ClaudeDesktopOwnershipTests: XCTestCase {
         )
         return ProviderAccountAssembly.make(
             observer: observer, accountsStore: ProviderAccountsStore(defaults: defaults),
-            coworkDiscovery: discovery, hasDesktopCredentialMaterial: { hasDesktopMaterial }
+            coworkDiscovery: discovery, hasDesktopCredentialMaterial: { expectedUser in
+                hasDesktopMaterial && (desktopUser.map {
+                    $0.caseInsensitiveCompare(expectedUser) == .orderedSame
+                } ?? true)
+            }
         )
     }
 
@@ -55,6 +60,19 @@ final class ClaudeDesktopOwnershipTests: XCTestCase {
 
         XCTAssertTrue(assembly.claudeCards.isEmpty)
         XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
+
+        let switched = makeAssembly(
+            defaultAccount: Account(user: "primary", organization: "personal"),
+            desktopAccounts: [
+                Account(user: "former", organization: "old-team"),
+                Account(user: "current", organization: "current-team"),
+                Account(user: "current", organization: "current-personal"),
+            ],
+            desktopUser: "current"
+        )
+        XCTAssertEqual(Set(switched.claudeCards.map(\.identityKey)), [
+            "current|current-team", "current|current-personal",
+        ])
     }
 
     func testUsersSharingAnOrganizationCannotBorrowEachOthersDesktopToken() {
