@@ -121,7 +121,20 @@ struct ClaudeDesktopAuthStore: Sendable {
         else {
             return false
         }
-        return Self.cookieRelativePaths.contains { files.exists(path($0)) }
+        let hosts = Self.cookieHosts.map { "'\($0)'" }.joined(separator: ", ")
+        for relativePath in Self.cookieRelativePaths {
+            let databasePath = path(relativePath)
+            guard files.exists(databasePath) else { continue }
+            let sql = """
+            SELECT 1 FROM cookies
+            WHERE name = 'lastActiveOrg' AND host_key IN (\(hosts))
+            LIMIT 1;
+            """
+            if (try? sqlite.queryValue(path: databasePath, sql: sql)) != nil {
+                return true
+            }
+        }
+        return false
     }
 
     /// Desktop retains this value after logout, so it is only an ownership hint, never login proof.

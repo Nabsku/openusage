@@ -160,7 +160,8 @@ final class ClaudeDesktopOwnershipTests: XCTestCase {
             root + "/Cookies": "present",
         ])
         let desktop = ClaudeDesktopAuthStore(
-            files: files, keyReader: UnexpectedSafeStorageReader(),
+            files: files, sqlite: FakeClaudeDesktopSQLite(value: "1"),
+            keyReader: UnexpectedSafeStorageReader(),
             homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
         )
         let auth = ClaudeAuthStore(

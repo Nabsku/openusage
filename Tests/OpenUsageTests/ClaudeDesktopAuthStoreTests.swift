@@ -52,11 +52,12 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
 
         var loggedOut = fixture.store
         loggedOut.sqlite = FakeClaudeDesktopSQLite(value: nil)
-        XCTAssertTrue(loggedOut.hasCredentialMaterial())
+        XCTAssertFalse(loggedOut.hasCredentialMaterial())
         let pinned = loggedOut.load(allowInteraction: false, organization: organization)
-        XCTAssertEqual(pinned.status, .invalid)
+        XCTAssertEqual(pinned.status, .notFound)
         XCTAssertNil(pinned.oauth)
         XCTAssertEqual(loggedOut.lastKnownAccountUUID(), account)
+        XCTAssertTrue(fixture.keyReader.calls.isEmpty)
 
         fixture.files.files.removeValue(forKey: home.appendingPathComponent(
             "Library/Application Support/Claude/Cookies"
@@ -691,7 +692,7 @@ private final class FakeClaudeDesktopKeyReader: ClaudeDesktopSafeStorageKeyReadi
     }
 }
 
-private final class FakeClaudeDesktopSQLite: SQLiteAccessing, @unchecked Sendable {
+final class FakeClaudeDesktopSQLite: SQLiteAccessing, @unchecked Sendable {
     let value: String?
 
     init(value: String?) {
