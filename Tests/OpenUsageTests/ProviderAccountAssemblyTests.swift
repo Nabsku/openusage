@@ -346,10 +346,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
         )])
         let observer = DefaultAccountObserver(
-            environment: FakeEnvironment(),
-            files: FakeFiles([
-                "/Users/dev/.claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stale"}}"#,
-            ]),
+            environment: FakeEnvironment(), files: FakeFiles(),
             keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
         )
         let work = "/Users/dev/.claude-work"
@@ -370,6 +367,45 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertNil(store.defaultBadgeHolder(family: "claude"))
         XCTAssertEqual(providers.map { $0.provider.id }, [try XCTUnwrap(assembly.claudeCards.first).id])
         XCTAssertFalse(assembly.allowsUnboundClaudeFallback)
+    }
+
+    func testUnreadableKnownDefaultKeepsItsOwnershipWhileScanningVerifiedConfigAccounts() throws {
+        for candidate in ["previous", "work"] {
+            let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+            store.reconcile(with: [.init(
+                family: "claude", identityKey: "previous", label: nil,
+                sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+            )])
+            let observer = DefaultAccountObserver(
+                environment: FakeEnvironment(),
+                files: FakeFiles([
+                    "/Users/dev/.claude/.credentials.json":
+                        #"{"claudeAiOauth":{"accessToken":"still-signed-in"}}"#,
+                ]),
+                keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+            )
+            let path = "/Users/dev/.claude-work"
+            let discovery = makeDiscovery(files: [
+                path + "/.claude.json": #"{"oauthAccount":{"accountUuid":"\#(candidate)"}}"#,
+                path + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"verified"}}"#,
+            ], subdirectories: [path])
+
+            let assembly = ProviderAccountAssembly.make(
+                observer: observer, accountsStore: store, claudeDiscovery: discovery
+            )
+            let providers = ProviderCatalog.make(
+                claudeCards: assembly.claudeCards,
+                defaultClaudeCardID: assembly.defaultClaudeCardID,
+                claudeIdentityKeys: assembly.identityKeysByCard,
+                allowsUnboundClaudeFallback: assembly.allowsUnboundClaudeFallback,
+                defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
+            ).compactMap { $0 as? ClaudeProvider }
+
+            XCTAssertEqual(store.defaultBadgeHolder(family: "claude")?.identityKey, "previous")
+            XCTAssertEqual(assembly.identityKeysByCard["claude"], "previous")
+            XCTAssertEqual(providers.first?.authStore.expectedIdentityKey, "previous")
+            XCTAssertEqual(assembly.claudeCards.count, candidate == "previous" ? 0 : 1)
+        }
     }
 
     func testNoDefaultLoginStillAcceptsAConfigDirOnlyAccount() throws {
@@ -491,7 +527,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         XCTAssertTrue(assembly.claudeCards.isEmpty)
         XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
-        XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .pinned("org-1"))
+        XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
         XCTAssertEqual(store.records.count, 1)
     }
 

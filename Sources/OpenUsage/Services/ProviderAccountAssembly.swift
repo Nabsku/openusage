@@ -190,14 +190,18 @@ struct ProviderAccountAssembly {
         let configScan = claudeCandidatesAllowed
             ? claudeDiscovery?.run(prioritizing: Set(preferredConfigAnchors.values))
             : nil
-        isClaudeDiscoveryComplete = configScan?.truncated != true
         let coworkScan = claudeCandidatesAllowed ? coworkDiscovery?.run() : nil
+        isClaudeDiscoveryComplete = configScan?.truncated != true && coworkScan?.truncated != true
         let desktopPolicy = ClaudeDesktopAccountPolicy(
             records: accountsStore.records,
             defaultOutcome: claudeOutcome,
-            configFindings: configScan?.findings ?? [],
-            coworkScan: coworkScan
+            configFindings: isClaudeDiscoveryComplete ? configScan?.findings ?? [] : [],
+            coworkScan: isClaudeDiscoveryComplete ? coworkScan : nil,
+            ownershipEvidenceIsComplete: isClaudeDiscoveryComplete
         )
+        if !isClaudeDiscoveryComplete {
+            defaultClaudeCoworkRoots = []
+        }
         var defaultClaudeVerifiedIdentityAliases: Set<ClaudeIdentity> = []
         if let defaultIdentity = identityKeys["claude"] {
             if let canonical = desktopPolicy.canonical(defaultIdentity) {
@@ -214,8 +218,15 @@ struct ProviderAccountAssembly {
                 AppLog.warn(.config, "discovery: Claude's default account matches multiple organizations; account routing quarantined")
             }
         }
-        if let scan = configScan, claudeCandidatesAllowed {
-            let defaultKey = identityKeys["claude"]
+        let rememberedDefaultKey: String?
+        if case .unresolved? = claudeOutcome {
+            rememberedDefaultKey = accountsStore.defaultBadgeHolder(family: "claude")
+                .flatMap { desktopPolicy.canonical($0.identityKey) }
+        } else {
+            rememberedDefaultKey = nil
+        }
+        if let scan = configScan, claudeCandidatesAllowed, isClaudeDiscoveryComplete {
+            let defaultKey = identityKeys["claude"] ?? rememberedDefaultKey
             for note in scan.notes {
                 AppLog.info(.config, "discovery: \(note)")
             }
@@ -299,8 +310,8 @@ struct ProviderAccountAssembly {
         // Desktop-backed card (org-pinned Safe Storage credentials) with its sandboxes as the
         // card's spend logs. The moment any non-default sandbox exists, the default card's walk is
         // partitioned so another account's sessions can't bleed into its spend.
-        if let scan = coworkScan, claudeCandidatesAllowed {
-            let defaultKey = identityKeys["claude"]
+        if let scan = coworkScan, claudeCandidatesAllowed, isClaudeDiscoveryComplete {
+            let defaultKey = identityKeys["claude"] ?? rememberedDefaultKey
             for note in scan.notes {
                 AppLog.info(.config, "discovery: \(note)")
             }
@@ -443,7 +454,6 @@ struct ProviderAccountAssembly {
         let allowsUnownedDesktop = !families.contains("claude")
             && !records.contains { $0.family == "claude" }
         let allowsActiveOrganization = (isClaudeDiscoveryComplete || allowsUnownedDesktop)
-            && coworkScan?.truncated != true
             && !desktopPolicy.hasMultipleAccounts
             && plannedCards.isEmpty
         let desktopAccess = if let defaultKey = identityKeys[defaultClaudeRecord?.id ?? "claude"] {

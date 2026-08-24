@@ -29,12 +29,14 @@ struct ClaudeIdentity: Hashable, Sendable {
 /// Every observed and remembered identity contributes to one closed Desktop ownership decision.
 struct ClaudeDesktopAccountPolicy {
     private let identities: Set<ClaudeIdentity>
+    private let ownershipEvidenceIsComplete: Bool
 
     init(
         records: [ProviderAccountRecord],
         defaultOutcome: DefaultAccountObserver.Outcome?,
         configFindings: [ClaudeConfigDirDiscovery.Finding],
-        coworkScan: ClaudeCoworkDiscovery.Result?
+        coworkScan: ClaudeCoworkDiscovery.Result?,
+        ownershipEvidenceIsComplete: Bool = true
     ) {
         let persisted = records.filter { $0.family == "claude" }.flatMap { record in
             ([record.identityKey] + (record.identityAliases ?? [])).compactMap(ClaudeIdentity.init)
@@ -48,6 +50,7 @@ struct ClaudeDesktopAccountPolicy {
             sandbox.identityKey.flatMap(ClaudeIdentity.init)
         })
         identities = collected
+        self.ownershipEvidenceIsComplete = ownershipEvidenceIsComplete
     }
 
     func canonical(_ value: String) -> String? {
@@ -72,6 +75,7 @@ struct ClaudeDesktopAccountPolicy {
     }
 
     func access(for value: String?, allowsActiveOrganization: Bool) -> ClaudeDesktopAccessPolicy {
+        guard ownershipEvidenceIsComplete else { return .denied }
         guard let value, let identity = ClaudeIdentity(value) else { return .denied }
         guard let organization = organization(for: value) else {
             return allowsActiveOrganization && !hasMultipleAccounts ? .activeOrganization : .denied
