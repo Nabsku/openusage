@@ -433,10 +433,14 @@ final class WidgetDataStore {
         for (providerID, descriptor) in registry.historyDescriptorsByProvider
         where descriptor.scope == .machineLocal && isProviderEnabled(providerID) {
             if let history = localSnapshots[providerID]?.usageHistory {
-                providers[providerID] = history
-                if let identity = providerIdentityKeys[providerID] {
+                if ProviderAccountID.families.contains(ProviderAccountID.family(of: providerID)) {
+                    guard let identity = providerIdentityKeys[providerID] else {
+                        AppLog.warn(.config, "sync: omitting unresolved account history for \(providerID)")
+                        continue
+                    }
                     identities[providerID] = identity
                 }
+                providers[providerID] = history
             }
         }
         return UsageHistoryDocument(
@@ -465,8 +469,12 @@ final class WidgetDataStore {
         // becomes a Total Spend-only remote entry below.
         let remapped = PeerHistoryRemapper.remap(
             documents: peerHistoryDocuments,
-            localIdentityByCardID: providerIdentityKeys
+            localIdentityByCardID: providerIdentityKeys,
+            localAccountCardIDs: Set(registry.providers.map(\.id))
         )
+        if !remapped.quarantined.isEmpty {
+            AppLog.warn(.config, "sync: quarantined \(remapped.quarantined.count) unverified peer account histories")
+        }
         let merged = UsageHistoryAggregator.merged(
             localSnapshots: localSnapshots,
             peerHistories: remapped.histories,
@@ -476,6 +484,7 @@ final class WidgetDataStore {
         remoteOnlySpend = Self.renderRemoteOnlySpend(
             remapped.remoteOnly,
             registry: registry,
+            isProviderEnabled: isProviderEnabled,
             now: renderDate
         )
         var rendered = localSnapshots
@@ -505,23 +514,23 @@ final class WidgetDataStore {
     private static func renderRemoteOnlySpend(
         _ remoteOnly: [PeerHistoryRemapper.RemoteOnlyHistory],
         registry: WidgetRegistry,
+        isProviderEnabled: @MainActor (String) -> Bool,
         now: Date
     ) -> [(provider: Provider, snapshot: ProviderSnapshot)] {
         remoteOnly.compactMap { entry in
-            guard let familyProvider = registry.provider(id: entry.family),
-                  let descriptor = registry.historyDescriptorsByProvider[entry.family]
+            guard let familyProvider = registry.providers.first(where: {
+                      ProviderAccountID.family(of: $0.id) == entry.family
+                          && isProviderEnabled($0.id)
+                          && registry.historyDescriptorsByProvider[$0.id]?.scope == .machineLocal
+                  }),
+                  let descriptor = registry.historyDescriptorsByProvider[familyProvider.id]
             else { return nil }
             let history = UsageHistoryAggregator.mergeHistories(entry.histories, now: now)
             guard !history.series.daily.isEmpty else { return nil }
 
-            let device = entry.deviceNames.count == 1
-                ? entry.deviceNames[0]
-                : "\(entry.deviceNames.count) other Macs"
-            // The stock family name, not the local family card's display name — that card is a
-            // DIFFERENT account (possibly renamed), and this slice shouldn't inherit its rename.
             let provider = Provider(
                 id: "\(entry.family)@peer-\(ProviderAccountID.hash8(entry.identityKey))",
-                displayName: "\(entry.family.capitalized) · \(device)",
+                displayName: entry.cardID,
                 icon: familyProvider.icon
             )
             let empty = ProviderSnapshot(

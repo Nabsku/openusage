@@ -4,9 +4,8 @@ import Foundation
 struct UsageHistoryDocument: Hashable, Sendable, Codable, Identifiable {
     /// v2 adds account cards (`claude@ab12cd34`) and the `identities` map that lets peers match
     /// histories by ACCOUNT instead of by card id — the same account can be the default card on one
-    /// Mac and an extra card on another. v1 documents stay readable (no identities → the legacy
-    /// same-card-id merge); v1 readers reject v2 documents with their designed "update OpenUsage"
-    /// message.
+    /// Mac and an extra card on another. Legacy account histories without ownership proof stay
+    /// readable but are quarantined; non-account provider histories still merge normally.
     static let currentSchema = "openusage.history.v2"
     static let legacySchemaV1 = "openusage.history.v1"
 
@@ -40,14 +39,37 @@ struct UsageHistoryDocument: Hashable, Sendable, Codable, Identifiable {
         // v1 card ids are bare provider ids; v2 additionally carries account cards (`claude@ab12cd34`).
         let idPattern = schema == Self.legacySchemaV1
             ? #"^[a-z0-9][a-z0-9-]*$"#
-            : #"^[a-z0-9][a-z0-9@-]*$"#
+            : #"^[a-z0-9][a-z0-9-]*(?:@[a-f0-9]{8})?$"#
         guard !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { throw UsageHistoryDocumentError.invalidDevice }
 
+        if schema == Self.legacySchemaV1, identities != nil {
+            throw UsageHistoryDocumentError.invalidIdentity("legacy schema")
+        }
+
+        var identitiesByFamily: [String: Set<String>] = [:]
+        for (providerID, identity) in identities ?? [:] {
+            let family = ProviderAccountID.family(of: providerID)
+            guard providers[providerID] != nil,
+                  ProviderAccountID.families.contains(family),
+                  !identity.isEmpty,
+                  identity.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
+                  !identity.contains("/"), !identity.contains("\\")
+            else { throw UsageHistoryDocumentError.invalidIdentity(providerID) }
+            guard identitiesByFamily[family, default: []].insert(identity).inserted else {
+                throw UsageHistoryDocumentError.duplicateIdentity(providerID)
+            }
+        }
+
         for (providerID, history) in providers {
             guard providerID.range(of: idPattern, options: .regularExpression) != nil else {
                 throw UsageHistoryDocumentError.invalidProvider(providerID)
+            }
+            if ProviderAccountID.isAccountCard(providerID) {
+                guard ProviderAccountID.families.contains(ProviderAccountID.family(of: providerID)),
+                      identities?[providerID] != nil
+                else { throw UsageHistoryDocumentError.invalidIdentity(providerID) }
             }
             var seriesDays: Set<String> = []
             for day in history.series.daily {
@@ -116,6 +138,8 @@ enum UsageHistoryDocumentError: Error, LocalizedError, Equatable {
     case unsupportedSchema
     case invalidDevice
     case invalidProvider(String)
+    case invalidIdentity(String)
+    case duplicateIdentity(String)
     case invalidDay(String)
     case duplicateDay(String)
     case duplicateModel(String)
@@ -126,6 +150,8 @@ enum UsageHistoryDocumentError: Error, LocalizedError, Equatable {
         case .unsupportedSchema: "This Mac wrote a newer usage-history format. Update OpenUsage."
         case .invalidDevice: "The synced Mac identity is invalid."
         case .invalidProvider: "The synced provider identifier is invalid."
+        case .invalidIdentity: "The synced account identity is invalid."
+        case .duplicateIdentity: "The synced account identity appears more than once."
         case .invalidDay: "The synced history contains an invalid date."
         case .duplicateDay: "The synced history contains the same date more than once."
         case .duplicateModel: "The synced history contains the same model more than once."
