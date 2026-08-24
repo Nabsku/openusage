@@ -64,7 +64,8 @@ final class ProviderAccountsStoreTests: XCTestCase {
         let defaults = makeScratchDefaults()
         let future = ProviderAccountSource.Kind(rawValue: "desktop")
         let existing = ProviderAccountRecord(
-            id: "claude", family: "claude", identityKey: "account-a", label: "Personal",
+            id: "claude", family: "claude", identityKey: "account-a",
+            identityAliases: ["previous-account-a"], label: "Personal",
             sources: [
                 .init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true),
                 .init(kind: future, anchor: nil, holdsDefaultSource: false),
@@ -77,6 +78,7 @@ final class ProviderAccountsStoreTests: XCTestCase {
 
         let restored = try XCTUnwrap(ProviderAccountsStore(defaults: defaults).records.first)
         XCTAssertEqual(restored.identityKey, "account-a")
+        XCTAssertEqual(restored.identityAliases, ["previous-account-a"])
         XCTAssertEqual(restored.sources.map(\.kind.rawValue), ["defaultHome", "desktop"])
     }
 

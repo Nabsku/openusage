@@ -85,6 +85,7 @@ struct ProviderAccountRecord: Codable, Equatable, Sendable {
     var id: String
     var family: String
     var identityKey: String
+    var identityAliases: [String]? = nil
     var label: String?
     /// A user-chosen card name (Rename in the card's context menu / Customize). Wins over `label`
     /// and the id-derived fallback; never touched by reconciliation.
