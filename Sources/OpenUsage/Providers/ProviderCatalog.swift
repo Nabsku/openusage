@@ -52,7 +52,7 @@ enum ProviderCatalog {
         }
         runtimes.sort { $0.provider.id == "claude" && $1.provider.id != "claude" }
         runtimes += [
-            CodexProvider(),
+            CodexProvider(expectedIdentityKey: claudeIdentityKeys["codex"]),
             CursorProvider(),
             AntigravityProvider(),
             CopilotProvider(defaults: defaults),

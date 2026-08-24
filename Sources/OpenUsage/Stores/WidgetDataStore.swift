@@ -37,7 +37,8 @@ final class WidgetDataStore {
     /// `ProviderAccountAssembly`. Drives the snapshot cache's account stamp: writes record the
     /// producer, and launch loads only paint an entry whose stamp matches. A card absent here has an
     /// unresolved identity this launch (or isn't account-aware) — its cache behaves as it always did.
-    private let providerIdentityKeys: [String: String]
+    @ObservationIgnored private var providerIdentityKeys: [String: String]
+    @ObservationIgnored private var knownAccountIdentitiesByFamily: [String: Set<String>]
     /// The live card title for a card id, `nil` for non-account providers — the account-registry
     /// name resolver, injected by `AppContainer` so notification titles carry renames. `nil`
     /// (tests, the one-shot CLI) falls back to the baked derived name.
@@ -151,6 +152,7 @@ final class WidgetDataStore {
         notificationSettings: (@MainActor () -> NotificationSettingsStore)? = nil,
         postNotification: (@MainActor (String, String, String, String) async -> Bool)? = nil,
         providerIdentityKeys: [String: String] = [:],
+        knownAccountIdentitiesByFamily: [String: Set<String>] = [:],
         resolveDisplayName: (@MainActor (String) -> String?)? = nil
     ) {
         precondition(slowProviderRefreshThreshold >= 0)
@@ -171,6 +173,11 @@ final class WidgetDataStore {
                 await AppNotifications.shared.post(idPrefix: idPrefix, title: title, subtitle: subtitle, body: body)
             }
         self.providerIdentityKeys = providerIdentityKeys
+        var knownIdentities = knownAccountIdentitiesByFamily.mapValues { Set($0.map { $0.lowercased() }) }
+        for (cardID, identity) in providerIdentityKeys {
+            knownIdentities[ProviderAccountID.family(of: cardID), default: []].insert(identity.lowercased())
+        }
+        self.knownAccountIdentitiesByFamily = knownIdentities
         self.resolveDisplayName = resolveDisplayName
         self.meterStyle = defaults.enumValue(forKey: Self.meterStyleKey, default: .remaining)
         self.resetDisplayMode = defaults.enumValue(forKey: Self.resetDisplayModeKey, default: .relative)
@@ -362,6 +369,20 @@ final class WidgetDataStore {
         }
         // Recovered: drop any backoff so the provider resumes the normal cadence immediately.
         failureRetryAfter[providerID] = nil
+        if let reporter = provider as? any AccountIdentityReporting {
+            let previousIdentity = providerIdentityKeys[providerID]?.lowercased()
+            let verifiedIdentity = reporter.verifiedAccountIdentityKey?.lowercased()
+            if verifiedIdentity == nil || verifiedIdentity != previousIdentity {
+                if localSnapshots.removeValue(forKey: providerID) != nil {
+                    AppLog.warn(.config, "accounts: \(providerID) ownership changed; previous history discarded")
+                }
+            }
+            providerIdentityKeys[providerID] = verifiedIdentity
+            if let verifiedIdentity {
+                knownAccountIdentitiesByFamily[ProviderAccountID.family(of: providerID), default: []]
+                    .insert(verifiedIdentity)
+            }
+        }
         // A provider can refresh its live limits successfully while its optional local log/CSV scan
         // produces no result. Keep only the last-good normalized history in that case; the new plan,
         // limits, warnings, and timestamp still win. A non-nil empty history remains authoritative and
@@ -438,6 +459,12 @@ final class WidgetDataStore {
                         AppLog.warn(.config, "sync: omitting unresolved account history for \(providerID)")
                         continue
                     }
+                    if providerID == "codex",
+                       knownAccountIdentitiesByFamily["codex", default: []].count > 1
+                    {
+                        AppLog.warn(.config, "sync: omitting Codex history shared by multiple accounts")
+                        continue
+                    }
                     identities[providerID] = identity.lowercased()
                 }
                 providers[providerID] = history
@@ -475,7 +502,8 @@ final class WidgetDataStore {
         let remapped = PeerHistoryRemapper.remap(
             documents: peerHistoryDocuments,
             localIdentityByCardID: providerIdentityKeys,
-            localAccountCardIDs: localAccountCardIDs
+            localAccountCardIDs: localAccountCardIDs,
+            knownAccountIdentitiesByFamily: knownAccountIdentitiesByFamily
         )
         if !remapped.quarantined.isEmpty {
             AppLog.warn(.config, "sync: quarantined \(remapped.quarantined.count) unverified peer account histories")

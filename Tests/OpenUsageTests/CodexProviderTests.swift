@@ -472,6 +472,53 @@ final class CodexUsageMapperTests: XCTestCase {
 
 @MainActor
 final class CodexProviderTests: XCTestCase {
+    func testKeychainAccountIdentityIsProvenOnlyByASuccessfulRefresh() async {
+        let credential = #"{"tokens":{"access_token":"keychain-token","account_id":"ACCOUNT-A"}}"#
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8)))
+        let provider = CodexProvider(
+            authStore: CodexAuthStore(files: FakeFiles(), keychain: FakeKeychain(credential)),
+            usageClient: CodexUsageClient(http: http), logUsageScanner: CodexLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        XCTAssertNil(provider.verifiedAccountIdentityKey)
+        _ = await provider.refresh()
+        XCTAssertEqual(provider.verifiedAccountIdentityKey, "account-a")
+    }
+
+    func testAccountBoundProviderRejectsForeignCredentialBeforeAnyAPIRequest() async {
+        let credential = #"{"tokens":{"access_token":"foreign-token","account_id":"account-b"}}"#
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8)))
+        let provider = CodexProvider(
+            authStore: CodexAuthStore(files: FakeFiles(), keychain: FakeKeychain(credential)),
+            usageClient: CodexUsageClient(http: http), logUsageScanner: CodexLogFixture.scanner(home: nil),
+            expectedIdentityKey: "account-a", pricing: { TestPricing.bundled }
+        )
+
+        _ = await provider.refresh()
+        XCTAssertNil(provider.verifiedAccountIdentityKey)
+        XCTAssertTrue(http.requests.isEmpty)
+    }
+
+    func testAccountBoundProviderRejectsLoginChangesDuringUsageRequest() async {
+        let path = "/tmp/codex/auth.json"
+        let files = FakeFiles([path: #"{"tokens":{"access_token":"a","account_id":"account-a"}}"#])
+        let http = RoutingHTTPClient { _ in
+            files.files[path] = #"{"tokens":{"access_token":"b","account_id":"account-b"}}"#
+            return HTTPResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))
+        }
+        let provider = CodexProvider(
+            authStore: CodexAuthStore(environment: FakeEnvironment(["CODEX_HOME": "/tmp/codex"]),
+                                      files: files, keychain: FakeKeychain()),
+            usageClient: CodexUsageClient(http: http), logUsageScanner: CodexLogFixture.scanner(home: nil),
+            expectedIdentityKey: "account-a", pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+        XCTAssertNotNil(snapshot.errorCategory)
+        XCTAssertNil(provider.verifiedAccountIdentityKey)
+    }
+
     func testNoUsageDataBadgeIsDroppedWhenLocalLogsHaveSpend() async throws {
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         // The live usage API returns nothing mappable (empty body -> no metric lines)...

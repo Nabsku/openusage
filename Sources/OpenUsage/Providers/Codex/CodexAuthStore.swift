@@ -41,6 +41,13 @@ struct CodexAuthState: Hashable, Sendable {
     var hasUsableAccessToken: Bool {
         auth.tokens?.accessToken?.isEmpty == false
     }
+
+    var accountIdentityKey: String? {
+        auth.tokens?.accountID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? auth.tokens?.idToken.flatMap {
+                DefaultAccountObserver.chatGPTAccountID(inIDTokenPayload: ProviderParse.jwtPayload($0))
+            }
+    }
 }
 
 enum CodexAuthError: Error, LocalizedError, Equatable {
@@ -217,4 +224,3 @@ private extension CodexAuthState.Source {
         return false
     }
 }
-

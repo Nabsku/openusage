@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-final class CodexProvider: ProviderRuntime {
+final class CodexProvider: ProviderRuntime, AccountIdentityReporting {
     let provider = Provider(
         id: "codex",
         displayName: "Codex",
@@ -15,19 +15,23 @@ final class CodexProvider: ProviderRuntime {
     let authStore: CodexAuthStore
     let usageClient: CodexUsageClient
     let logUsageScanner: CodexLogUsageScanner
+    let expectedIdentityKey: String?
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
+    private(set) var verifiedAccountIdentityKey: String?
 
     init(
         authStore: CodexAuthStore = CodexAuthStore(),
         usageClient: CodexUsageClient = CodexUsageClient(),
         logUsageScanner: CodexLogUsageScanner = CodexLogUsageScanner(),
+        expectedIdentityKey: String? = nil,
         now: @escaping @Sendable () -> Date = Date.init,
         pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() }
     ) {
         self.authStore = authStore
         self.usageClient = usageClient
         self.logUsageScanner = logUsageScanner
+        self.expectedIdentityKey = expectedIdentityKey
         self.now = now
         self.pricing = pricing
     }
@@ -64,11 +68,11 @@ final class CodexProvider: ProviderRuntime {
         // usable access token counts (see `hasUsableAccessToken`) — an API-key-only auth.json can't
         // serve the usage API, so seeding it on would just show an error row.
         let fileCandidates = authStore.loadAuthCandidates()
-        if fileCandidates.contains(where: \.hasUsableAccessToken) {
+        if fileCandidates.contains(where: { $0.hasUsableAccessToken && belongsToExpectedAccount($0) }) {
             return true
         }
         let keychain = await loadOffMainActor { [authStore] in authStore.loadKeychainAuth() }
-        return keychain?.hasUsableAccessToken == true
+        return keychain.map { $0.hasUsableAccessToken && belongsToExpectedAccount($0) } == true
     }
 
     func refresh() async -> ProviderSnapshot {
@@ -101,6 +105,7 @@ final class CodexProvider: ProviderRuntime {
     }
 
     private func probe(authState initialState: CodexAuthState) async throws -> ProviderSnapshot {
+        try verifyAccountOwnership(initialState)
         var authState = initialState
         guard var accessToken = authState.auth.tokens?.accessToken, !accessToken.isEmpty else {
             if authState.auth.apiKey?.isEmpty == false {
@@ -115,6 +120,7 @@ final class CodexProvider: ProviderRuntime {
             // an already-rotated refresh_token and trip `refresh_token_reused` (issue #516).
             if let live = reloadLiveAuth(source: authState.source),
                let liveToken = live.auth.tokens?.accessToken, !liveToken.isEmpty {
+                try verifyAccountOwnership(live)
                 authState = live
                 accessToken = liveToken
             }
@@ -128,6 +134,7 @@ final class CodexProvider: ProviderRuntime {
         }
 
         let response = try await fetchUsageWithRetry(accessToken: accessToken, authState: &authState)
+        try verifyAccountOwnership(authState, checkingCurrentSource: true)
         // The access token may have rotated during the usage fetch's refresh-and-retry; read the live one.
         let currentToken = authState.auth.tokens?.accessToken ?? accessToken
         let resetCredits = await fetchResetCreditsBestEffort(
@@ -164,6 +171,8 @@ final class CodexProvider: ProviderRuntime {
         }
 
         MetricLine.appendNoDataIfNeeded(&mapped.lines)
+        try verifyAccountOwnership(authState, checkingCurrentSource: true)
+        verifiedAccountIdentityKey = authState.accountIdentityKey?.lowercased()
         return ProviderSnapshot.make(
             provider: provider,
             plan: mapped.plan,
@@ -222,6 +231,20 @@ final class CodexProvider: ProviderRuntime {
         }
     }
 
+    private func belongsToExpectedAccount(_ state: CodexAuthState) -> Bool {
+        guard let expectedIdentityKey else { return true }
+        return state.accountIdentityKey?.caseInsensitiveCompare(expectedIdentityKey) == .orderedSame
+    }
+
+    private func verifyAccountOwnership(_ state: CodexAuthState, checkingCurrentSource: Bool = false) throws {
+        guard belongsToExpectedAccount(state) else { throw CodexAuthError.tokenConflict }
+        if checkingCurrentSource, let identity = state.accountIdentityKey {
+            guard reloadLiveAuth(source: state.source)?.accountIdentityKey?
+                .caseInsensitiveCompare(identity) == .orderedSame
+            else { throw CodexAuthError.tokenConflict }
+        }
+    }
+
     private func refreshAccessToken(authState: inout CodexAuthState, refreshToken: String) async throws -> String {
         let response = try await usageClient.refreshToken(refreshToken)
         authState.auth.tokens?.accessToken = response.accessToken
@@ -232,6 +255,7 @@ final class CodexProvider: ProviderRuntime {
             authState.auth.tokens?.idToken = idToken
         }
         authState.auth.lastRefresh = OpenUsageISO8601.string(from: now())
+        try verifyAccountOwnership(authState, checkingCurrentSource: true)
         // Fail loudly: a swallowed save strands the rotated token on disk (next launch re-refreshes /
         // can surface a false "token expired"). The refreshed token works for this session, so log and
         // continue. This is also the only call site of authStore.save, so a genuinely undecodable

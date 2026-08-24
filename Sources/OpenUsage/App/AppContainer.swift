@@ -102,6 +102,11 @@ final class AppContainer {
             orderedDescriptors: { [layout] in layout.visiblePlaced.compactMap { layout.descriptor(for: $0) } },
             notificationSettings: { notificationSettings },
             providerIdentityKeys: accountAssembly.identityKeysByCard,
+            knownAccountIdentitiesByFamily: accounts.records.reduce(into: [:]) { identities, record in
+                identities[record.family, default: []].formUnion(
+                    [record.identityKey] + (record.identityAliases ?? [])
+                )
+            },
             resolveDisplayName: { [accounts] in accounts.resolvedDisplayName(cardID: $0) }
         )
         let iCloudSync = ICloudUsageSyncStore(dataStore: dataStore)

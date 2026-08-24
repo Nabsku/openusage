@@ -162,6 +162,70 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
     }
 
+    func testOrganizationlessIdentityFollowsItsOnlyVerifiedOrganization() {
+        let document = makeDocument(
+            providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
+            identities: ["claude": "uuid-me"]
+        )
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [document], localIdentityByCardID: ["claude": teamKey],
+            localAccountCardIDs: ["claude"],
+            knownAccountIdentitiesByFamily: ["claude": ["uuid-me", teamKey]]
+        )
+
+        XCTAssertEqual(remapped.histories.map(\.cardID), ["claude"])
+        XCTAssertTrue(remapped.remoteOnly.isEmpty)
+    }
+
+    func testOrganizationlessIdentityIsQuarantinedWhenMultipleOrganizationsExist() {
+        let document = makeDocument(
+            providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
+            identities: ["claude": "uuid-me"]
+        )
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [document], localIdentityByCardID: ["claude": teamKey],
+            localAccountCardIDs: ["claude"],
+            knownAccountIdentitiesByFamily: ["claude": [teamKey, maxKey]]
+        )
+
+        XCTAssertEqual(remapped.quarantined.map(\.reason), [.ambiguousPeerIdentity])
+        XCTAssertTrue(remapped.histories.isEmpty)
+    }
+
+    func testCodexExportsOnlyVerifiedHistoryWithoutCrossAccountCarryForward() async {
+        let codex = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))
+        let descriptor = WidgetDescriptor.usageTrend(provider: codex)
+            .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test")
+        let knownHistory = history(day: "2026-07-16", tokens: 10, cost: 1)
+        let cases: [(previous: String?, current: String?, fresh: Bool, exports: Bool)] = [
+            (nil, "account-b", true, true),
+            ("account-a", "account-b", false, false),
+            ("account-a", nil, false, false),
+            ("account-a", "account-b", true, false),
+        ]
+        for scenario in cases {
+            let cache = scratchCache()
+            if let previous = scenario.previous {
+                cache.store(snapshot(providerID: "codex", history: knownHistory), producedByIdentityKey: previous)
+            }
+            let next = scenario.fresh
+                ? snapshot(providerID: "codex", history: knownHistory)
+                : ProviderSnapshot(providerID: "codex", displayName: "Codex", lines: [])
+            let runtime = AccountReportingRuntime(provider: codex, snapshot: next, identity: scenario.current)
+            let store = WidgetDataStore(
+                registry: WidgetRegistry(providers: [codex], descriptors: [descriptor]),
+                providers: [runtime], cache: cache, defaults: makeScratchDefaults("CodexOwnership"),
+                providerIdentityKeys: scenario.previous.map { ["codex": $0] } ?? [:],
+                knownAccountIdentitiesByFamily: scenario.previous.map { ["codex": Set([$0])] } ?? [:]
+            )
+            _ = await store.refresh(providerID: "codex", force: true)
+            let document = store.localHistoryDocument(deviceID: "this-mac", deviceName: "This Mac")
+            XCTAssertEqual(document.providers["codex"] != nil, scenario.exports)
+            XCTAssertEqual(document.identities?["codex"], scenario.exports ? scenario.current : nil)
+            if !scenario.fresh { XCTAssertNil(store.snapshots["codex"]?.usageHistory) }
+        }
+    }
+
     func testLocalDocumentPublishesAccountCardsWithIdentities() {
         let registry = makeRegistry()
         // Preload the cache; the store's init adopts cached snapshots as its local set. The entries
@@ -312,6 +376,25 @@ final class PeerHistoryIdentityTests: XCTestCase {
     }
 
     // MARK: - Fixtures
+
+    private final class AccountReportingRuntime: ProviderRuntime, AccountIdentityReporting {
+        let provider: Provider
+        let widgetDescriptors: [WidgetDescriptor] = []
+        let snapshot: ProviderSnapshot
+        let identity: String?
+        private(set) var verifiedAccountIdentityKey: String?
+
+        init(provider: Provider, snapshot: ProviderSnapshot, identity: String?) {
+            self.provider = provider
+            self.snapshot = snapshot
+            self.identity = identity
+        }
+
+        func refresh() async -> ProviderSnapshot {
+            verifiedAccountIdentityKey = identity
+            return snapshot
+        }
+    }
 
     private func makeRegistry() -> WidgetRegistry {
         let claude = ClaudeProvider.makeProvider()
