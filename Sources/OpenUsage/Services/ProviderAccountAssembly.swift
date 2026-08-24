@@ -199,12 +199,20 @@ struct ProviderAccountAssembly {
         }
 
         let records = accountsStore.reconcile(with: observations)
-        let observedDefaultIdentity = identityKeys["claude"]
-        let defaultClaudeRecord = accountsStore.defaultBadgeHolder(family: "claude").flatMap { record in
-            record.identityKey == observedDefaultIdentity ? record : nil
+        let badgeHolder = accountsStore.defaultBadgeHolder(family: "claude")
+        let defaultClaudeRecord: ProviderAccountRecord?
+        switch claudeOutcome {
+        case .resolved:
+            defaultClaudeRecord = badgeHolder?.identityKey == identityKeys["claude"] ? badgeHolder : nil
+        case .unresolved:
+            defaultClaudeRecord = badgeHolder
+        case .absent, .none:
+            defaultClaudeRecord = nil
         }
-        if let defaultClaudeRecord, defaultClaudeRecord.id != "claude" {
-            identityKeys.removeValue(forKey: "claude")
+        if let defaultClaudeRecord {
+            if defaultClaudeRecord.id != "claude" {
+                identityKeys.removeValue(forKey: "claude")
+            }
             identityKeys[defaultClaudeRecord.id] = defaultClaudeRecord.identityKey
         }
 

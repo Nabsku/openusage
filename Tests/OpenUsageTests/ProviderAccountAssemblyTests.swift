@@ -37,6 +37,24 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(record.sources.map(\.kind), [.defaultHome])
         // An unresolved family claims no account: no record, no identity key.
         XCTAssertNil(store.defaultBadgeHolder(family: "codex"))
+
+        let unreadable = DefaultAccountObserver(
+            environment: FakeEnvironment(),
+            files: FakeFiles([
+                "/Users/dev/.claude/.credentials.json":
+                    #"{"claudeAiOauth":{"accessToken":"still-signed-in"}}"#,
+            ]),
+            keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let retained = ProviderAccountAssembly.make(observer: unreadable, accountsStore: store)
+        let runtime = try XCTUnwrap(ProviderCatalog.make(
+            defaultClaudeCardID: retained.defaultClaudeCardID,
+            claudeIdentityKeys: retained.identityKeysByCard
+        ).first as? ClaudeProvider)
+
+        XCTAssertEqual(retained.identityKeysByCard["claude"], "acct-1")
+        XCTAssertEqual(runtime.authStore.expectedIdentityKey, "acct-1")
     }
 
     /// A family whose home facts aren't readable this launch (first Finder/Dock launch racing a
@@ -348,6 +366,27 @@ final class ProviderAccountAssemblyTests: XCTestCase {
                        .configDir(path: path, keychainLiteral: path))
         XCTAssertEqual(runtimes.last?.provider.id, assembly.defaultClaudeCardID)
         XCTAssertEqual(runtimes.last?.authStore.scope, .standard)
+
+        let temporarilyUnreadable = DefaultAccountObserver(
+            environment: FakeEnvironment(),
+            files: FakeFiles([
+                "/Users/dev/.claude/.credentials.json":
+                    #"{"claudeAiOauth":{"accessToken":"account-b"}}"#,
+            ]),
+            keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let unresolved = ProviderAccountAssembly.make(
+            observer: temporarilyUnreadable, accountsStore: store
+        )
+        let retained = ProviderCatalog.make(
+            defaultClaudeCardID: unresolved.defaultClaudeCardID,
+            claudeIdentityKeys: unresolved.identityKeysByCard
+        ).compactMap { $0 as? ClaudeProvider }
+
+        XCTAssertEqual(unresolved.defaultClaudeCardID, assembly.defaultClaudeCardID)
+        XCTAssertEqual(retained.map { $0.provider.id }, [assembly.defaultClaudeCardID])
+        XCTAssertEqual(retained.first?.authStore.expectedIdentityKey, "account-b")
 
         let signedOut = DefaultAccountObserver(
             environment: FakeEnvironment(), files: FakeFiles(), keychain: FakeKeychain(),
