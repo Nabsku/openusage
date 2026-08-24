@@ -26,6 +26,18 @@ final class ProviderEnablementStore {
     private static let enabledStorageKey = "openusage.enabledProviders.v1"
     private static let knownStorageKey = "openusage.knownProviders.v1"
     private static let pendingDetectionStorageKey = "openusage.pendingProviderDetection.v1"
+    private static let detectionJobStorageKey = "openusage.providerDetectionJob.v1"
+
+    struct DetectionJob: Codable, Equatable, Sendable {
+        enum Mode: String, Codable, Sendable {
+            case replacement
+            case additive
+        }
+
+        var mode: Mode
+        var ids: Set<String>
+        var baseline: Set<String>
+    }
 
     /// Posted when the enabled-provider set actually changes. The refresh loop listens for this to wake
     /// early and fetch a newly-enabled provider promptly, instead of waiting out the full interval —
@@ -54,14 +66,16 @@ final class ProviderEnablementStore {
     /// Every provider ID this install has ever seen (see the type comment). Seeded by the v2 settings
     /// migration or `FirstRunSeeder`, then grown by `registerKnownProviders`.
     private(set) var knownIDs: Set<String>
-    /// Credential checks that were registered but have not finished. Account graph replacement can
-    /// cancel their owning task, so the next graph resumes them without mistaking "known" for done.
-    private(set) var pendingDetectionIDs: Set<String>
+    /// One persisted detection job preserves both the unfinished checks and whether they replace the
+    /// first-launch fallback or only add newly detected providers.
+    private(set) var detectionJob: DetectionJob?
+    var pendingDetectionIDs: Set<String> { detectionJob?.ids ?? [] }
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        if let enabled = defaults.stringArray(forKey: Self.enabledStorageKey) {
+        let persistedEnabledIDs = defaults.stringArray(forKey: Self.enabledStorageKey)
+        if let enabled = persistedEnabledIDs {
             self.enabledIDs = Set(enabled)
             self.disabledIDs = []
         } else {
@@ -69,7 +83,25 @@ final class ProviderEnablementStore {
             self.disabledIDs = Set(defaults.stringArray(forKey: Self.disabledStorageKey) ?? [])
         }
         self.knownIDs = Set(defaults.stringArray(forKey: Self.knownStorageKey) ?? [])
-        self.pendingDetectionIDs = Set(defaults.stringArray(forKey: Self.pendingDetectionStorageKey) ?? [])
+        if let data = defaults.data(forKey: Self.detectionJobStorageKey) {
+            do {
+                self.detectionJob = try JSONDecoder().decode(DetectionJob.self, from: data)
+            } catch {
+                self.detectionJob = nil
+                AppLog.error(.config, "provider detection job was undecodable: \(error.localizedDescription)")
+            }
+        } else {
+            let legacyPending = Set(defaults.stringArray(forKey: Self.pendingDetectionStorageKey) ?? [])
+            self.detectionJob = legacyPending.isEmpty ? nil : DetectionJob(
+                mode: .additive,
+                ids: legacyPending,
+                baseline: Set(persistedEnabledIDs ?? [])
+            )
+            if !legacyPending.isEmpty {
+                persistDetectionJob()
+                defaults.removeObject(forKey: Self.pendingDetectionStorageKey)
+            }
+        }
     }
 
     func isEnabled(_ id: String) -> Bool {
@@ -120,20 +152,42 @@ final class ProviderEnablementStore {
     }
 
     func markProviderDetectionPending(_ ids: Set<String>) {
-        updatePendingDetection(pendingDetectionIDs.union(ids))
+        beginProviderDetection(
+            ids,
+            mode: detectionJob?.mode ?? .additive,
+            baseline: detectionJob?.baseline ?? enabledIDs ?? []
+        )
+    }
+
+    func beginProviderDetection(_ ids: Set<String>, mode: DetectionJob.Mode, baseline: Set<String>) {
+        let updated = DetectionJob(
+            mode: mode,
+            ids: pendingDetectionIDs.union(ids),
+            baseline: baseline
+        )
+        guard !updated.ids.isEmpty, updated != detectionJob else { return }
+        detectionJob = updated
+        persistDetectionJob()
     }
 
     func finishProviderDetection(_ ids: Set<String>) {
-        updatePendingDetection(pendingDetectionIDs.subtracting(ids))
+        guard var job = detectionJob else { return }
+        job.ids.subtract(ids)
+        let updated = job.ids.isEmpty ? nil : job
+        guard updated != detectionJob else { return }
+        detectionJob = updated
+        persistDetectionJob()
     }
 
-    private func updatePendingDetection(_ pending: Set<String>) {
-        guard pending != pendingDetectionIDs else { return }
-        pendingDetectionIDs = pending
-        if pending.isEmpty {
-            defaults.removeObject(forKey: Self.pendingDetectionStorageKey)
-        } else {
-            defaults.set(Array(pending), forKey: Self.pendingDetectionStorageKey)
+    private func persistDetectionJob() {
+        guard let detectionJob else {
+            defaults.removeObject(forKey: Self.detectionJobStorageKey)
+            return
+        }
+        do {
+            defaults.set(try JSONEncoder().encode(detectionJob), forKey: Self.detectionJobStorageKey)
+        } catch {
+            AppLog.error(.config, "failed to persist provider detection job: \(error.localizedDescription)")
         }
     }
 

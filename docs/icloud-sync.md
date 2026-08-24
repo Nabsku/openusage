@@ -7,10 +7,12 @@ existing file after app preferences are reset or the app is reinstalled. There i
 pairing code, or separate account.
 
 The file contains normalized daily tokens and spend, model totals, and unknown-model names for sources
-that are local to one Mac: Claude, Codex, Grok, and OpenCode. It does not contain credentials, account
-limits, raw logs, or provider responses. Cursor's history is already account-wide, so it stays local and
-is never added across Macs. Disabling a provider immediately removes its peer contributions from the
-combined view and omits it from this Mac's next iCloud write, while its local cached snapshot remains.
+that are local to one Mac: Claude, Grok, and OpenCode. Codex history remains device-local because its
+logs cannot yet prove which account produced them; it will not sync across Macs until account ownership
+can be verified. The file does not contain credentials, account limits, raw logs, or provider responses.
+Cursor's history is already account-wide, so it stays local and is never added across Macs. Disabling a
+provider immediately removes its peer contributions from the combined view and omits it from this
+Mac's next iCloud write, while its local cached snapshot remains.
 
 OpenUsage combines the valid files in memory and rebuilds Today, Yesterday, Last 30 Days, Usage Trend,
 unknown-model warnings, and model breakdowns. The same combined spend rows feed the dashboard, Total

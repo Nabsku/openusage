@@ -137,15 +137,10 @@ actor ICloudUsageHistoryFileStore: UsageHistoryFileStoring {
         return try result?.get() ?? { throw CocoaError(.fileReadUnknown) }()
     }
 
-    func coordinatedWrite(
-        _ data: Data,
-        to url: URL,
-        beforeWriting: @Sendable () -> Void = {}
-    ) throws {
+    func coordinatedWrite(_ data: Data, to url: URL) throws {
         var coordinationError: NSError?
         var operationError: Error?
         NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { coordinatedURL in
-            beforeWriting()
             do {
                 // File coordination can block until after this account graph has been retired.
                 // Recheck inside its accessor so an older graph cannot overwrite its replacement.
@@ -259,7 +254,8 @@ final class ICloudUsageSyncStore {
         isShutDownForAccountGraphReload = true
         writeTask?.cancel()
         writeTask = nil
-        activationTask?.cancel()
+        let retiredActivation = activationTask
+        retiredActivation?.cancel()
         activationTask = nil
         dataStore.onLocalHistoryChanged = nil
         stopObserving()
@@ -277,6 +273,7 @@ final class ICloudUsageSyncStore {
                 }
             }
             await previousCleanup?.value
+            await retiredActivation?.value
             guard !defaults.bool(forKey: Self.enabledKey) else { return }
             do {
                 try await fileStore.delete(deviceID: deviceID)

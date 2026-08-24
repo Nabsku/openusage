@@ -461,6 +461,16 @@ final class WidgetDataStore {
     func setPeerHistoryDocuments(_ documents: [UsageHistoryDocument], ownDeviceID: String) {
         peerHistoryDocuments = UsageHistoryDocument.newestByDevice(documents)
             .filter { $0.deviceID != ownDeviceID }
+            .map { document in
+                var document = document
+                document.providers = document.providers.filter {
+                    ProviderAccountID.family(of: $0.key) != "codex"
+                }
+                document.identities = document.identities?.filter {
+                    ProviderAccountID.family(of: $0.key) != "codex"
+                }
+                return document
+            }
         rebuildRenderedSnapshots()
     }
 
@@ -478,7 +488,10 @@ final class WidgetDataStore {
         // match a default card's history to whatever card that account is over there (see
         // `PeerHistoryRemapper`).
         for (providerID, descriptor) in registry.historyDescriptorsByProvider
-        where descriptor.scope == .machineLocal && isProviderEnabled(providerID) {
+        where descriptor.scope == .machineLocal
+            && ProviderAccountID.family(of: providerID) != "codex"
+            && isProviderEnabled(providerID)
+        {
             if let history = localSnapshots[providerID]?.usageHistory {
                 if ProviderAccountID.families.contains(ProviderAccountID.family(of: providerID)) {
                     if let reporter = providersByID[providerID] as? any AccountIdentityReporting,
@@ -528,7 +541,9 @@ final class WidgetDataStore {
         let enabledDescriptors = registry.historyDescriptorsByProvider.reduce(
             into: [String: UsageHistoryDescriptor]()
         ) { result, entry in
-            if isProviderEnabled(entry.key) { result[entry.key] = entry.value }
+            if ProviderAccountID.family(of: entry.key) != "codex", isProviderEnabled(entry.key) {
+                result[entry.key] = entry.value
+            }
         }
         // Match peers by account identity, not card id — the same account can be the default card
         // on one Mac and an extra account card on another. Whatever matches no local card at all

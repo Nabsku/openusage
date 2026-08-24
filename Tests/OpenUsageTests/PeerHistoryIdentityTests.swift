@@ -342,6 +342,56 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertNoThrow(try document.validate())
     }
 
+    func testCodexHistoryStaysLocalWhileClaudeStillSyncsBothWays() throws {
+        let existing = makeRegistry()
+        let codex = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))
+        let codexDescriptor = WidgetDescriptor.usageTrend(provider: codex)
+            .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test")
+        let registry = WidgetRegistry(
+            providers: existing.providers + [codex],
+            descriptors: existing.descriptors + [codexDescriptor]
+        )
+        let cache = scratchCache()
+        let today = dayKey(Date())
+        let localCodex = history(day: today, tokens: 20, cost: 2)
+        let codexSnapshot = UsageHistorySnapshotRenderer.render(
+            local: snapshot(providerID: "codex", history: localCodex),
+            history: localCodex,
+            descriptor: try XCTUnwrap(registry.historyDescriptorsByProvider["codex"]),
+            combined: false
+        )
+        cache.store(
+            snapshot(providerID: "claude", history: history(day: today, tokens: 10, cost: 1)),
+            producedByIdentityKey: maxKey
+        )
+        cache.store(codexSnapshot, producedByIdentityKey: "codex-local")
+        let dataStore = WidgetDataStore(
+            registry: registry,
+            providers: [],
+            cache: cache,
+            defaults: makeScratchDefaults("CodexDeviceLocal"),
+            providerIdentityKeys: ["claude": maxKey, "codex": "codex-local"]
+        )
+
+        let outgoing = dataStore.localHistoryDocument(deviceID: "this-mac", deviceName: "This Mac")
+        XCTAssertEqual(Set(outgoing.providers.keys), ["claude"])
+        XCTAssertEqual(outgoing.identities, ["claude": maxKey])
+        XCTAssertNoThrow(try outgoing.validate())
+
+        let incoming = makeDocument(
+            providers: [
+                "claude": history(day: today, tokens: 100, cost: 10),
+                "codex": history(day: today, tokens: 900, cost: 90),
+            ],
+            identities: ["claude": maxKey, "codex": "codex-local"]
+        )
+        dataStore.setPeerHistoryDocuments([incoming], ownDeviceID: "this-mac")
+
+        XCTAssertEqual(dataStore.snapshots["codex"], codexSnapshot)
+        XCTAssertNotNil(dataStore.snapshots["claude"]?.line(label: "Today"))
+        XCTAssertTrue(dataStore.remoteOnlySpend.isEmpty)
+    }
+
     func testRemoteOnlyAccountFeedsTotalSpend() {
         let registry = makeRegistry()
         let dataStore = WidgetDataStore(

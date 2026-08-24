@@ -32,6 +32,14 @@ struct ClaudeAccountCard: Equatable, Sendable {
     var logRoots: [URL]
 }
 
+/// A background scan is reusable only when both account-source walks completed.
+struct PreparedProviderAccountDiscovery: Sendable {
+    var config: ClaudeConfigDirDiscovery.Result
+    var cowork: ClaudeCoworkDiscovery.Result
+
+    var isComplete: Bool { !config.truncated && !cowork.truncated }
+}
+
 /// The launch-time account pass: read which account is signed in at each family's default home,
 /// scan for extra Claude logins in custom config dirs, reconcile the account registry, and expose
 /// what the rest of launch consumes — the per-card identity map (snapshot-cache account stamp) and
@@ -70,7 +78,8 @@ struct ProviderAccountAssembly {
     static func make(
         defaults: UserDefaults = .standard,
         accountsStore: ProviderAccountsStore? = nil,
-        waitsForLoginShell: Bool
+        waitsForLoginShell: Bool,
+        preparedDiscovery: PreparedProviderAccountDiscovery? = nil
     ) -> ProviderAccountAssembly {
         // The identity read needs the login shell's exports (CLAUDE_CONFIG_DIR/CODEX_HOME name the
         // default homes), and it reads them through the very same reader the provider auth stores
@@ -105,7 +114,8 @@ struct ProviderAccountAssembly {
             accountsStore: resolvedAccountsStore,
             families: families,
             claudeDiscovery: ClaudeConfigDirDiscovery(),
-            coworkDiscovery: ClaudeCoworkDiscovery()
+            coworkDiscovery: ClaudeCoworkDiscovery(),
+            preparedDiscovery: preparedDiscovery
         )
     }
 
@@ -128,12 +138,22 @@ struct ProviderAccountAssembly {
         families: Set<String> = ProviderAccountID.families,
         claudeDiscovery: ClaudeConfigDirDiscovery? = nil,
         coworkDiscovery: ClaudeCoworkDiscovery? = nil,
+        preparedDiscovery: PreparedProviderAccountDiscovery? = nil,
         hasDesktopCredentialMaterial: @Sendable (String) -> Bool = { expectedUser in
             let desktop = ClaudeDesktopAuthStore()
             return desktop.hasCredentialMaterial()
                 && desktop.lastKnownAccountUUID()?.caseInsensitiveCompare(expectedUser) == .orderedSame
         }
     ) -> ProviderAccountAssembly {
+        guard preparedDiscovery?.isComplete != false else {
+            AppLog.warn(.config, "accounts: refusing to reconcile incomplete prepared account discovery")
+            return ProviderAccountAssembly(
+                identityKeysByCard: [:],
+                allowsUnboundClaudeFallback: !accountsStore.records.contains { $0.family == "claude" },
+                isClaudeDiscoveryComplete: false,
+                defaultClaudeDesktopAccess: .denied
+            )
+        }
         var identityKeys: [String: String] = [:]
         var observations: [ProviderAccountsStore.AccountObservation] = []
 
@@ -188,9 +208,12 @@ struct ProviderAccountAssembly {
             }
         }
         let configScan = claudeCandidatesAllowed
-            ? claudeDiscovery?.run(prioritizing: Set(preferredConfigAnchors.values))
+            ? preparedDiscovery?.config
+                ?? claudeDiscovery?.run(prioritizing: Set(preferredConfigAnchors.values))
             : nil
-        let coworkScan = claudeCandidatesAllowed ? coworkDiscovery?.run() : nil
+        let coworkScan = claudeCandidatesAllowed
+            ? preparedDiscovery?.cowork ?? coworkDiscovery?.run()
+            : nil
         isClaudeDiscoveryComplete = claudeCandidatesAllowed
             && configScan?.truncated != true
             && coworkScan?.truncated != true

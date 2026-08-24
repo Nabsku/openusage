@@ -162,13 +162,8 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
 
         let fileStore = ICloudUsageHistoryFileStore()
         let retiredWriter = Task.detached {
-            try await fileStore.coordinatedWrite(
-                Data("retired-account".utf8),
-                to: documentURL,
-                beforeWriting: {
-                    withUnsafeCurrentTask { task in task?.cancel() }
-                }
-            )
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await fileStore.coordinatedWrite(Data("retired-account".utf8), to: documentURL)
         }
 
         do {
@@ -208,8 +203,8 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
 
         await fileStore.holdNextDelete()
         retired.enabled = false
-        retired.shutdownForAccountGraphReload()
         try await waitUntil { await fileStore.deleteIsHeld }
+        retired.shutdownForAccountGraphReload()
         let replacement = makeSync(defaults, fileStore: fileStore, deviceIDStore: deviceIDStore)
         replacement.enabled = true
 
@@ -220,6 +215,8 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         try await waitUntil { await fileStore.writeCount == 2 && !replacement.isSyncing }
         let documents = await fileStore.documents
         XCTAssertEqual(documents.map(\.deviceID), [replacement.deviceID])
+        let deletedDeviceIDs = await fileStore.deletedDeviceIDs
+        XCTAssertEqual(deletedDeviceIDs, [replacement.deviceID])
         XCTAssertTrue(replacement.enabled)
     }
 

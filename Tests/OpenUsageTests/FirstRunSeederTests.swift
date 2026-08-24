@@ -95,6 +95,33 @@ final class FirstRunSeederTests: XCTestCase {
         XCTAssertEqual(enablement.enabledIDs, ["claude", "cursor"])
     }
 
+    func testCancelledFirstRunStillReplacesCredentiallessFallbackAfterReload() async throws {
+        let defaults = makeDefaults("cancelled-first-run-replacement")
+        let original = ProviderEnablementStore(defaults: defaults)
+        let onboarding = OnboardingStore(defaults: makeDefaults("cancelled-replacement-onboarding"))
+        let providers: [ProviderRuntime] = [
+            stub("claude", hasCredentials: true),
+            stub("codex", hasCredentials: false),
+            stub("cursor", hasCredentials: false),
+            stub("grok", hasCredentials: true),
+        ]
+        let cancelled = try XCTUnwrap(FirstRunSeeder.seedIfNeeded(
+            isFreshInstall: true, providers: providers, enablement: original, onboarding: onboarding
+        ))
+        cancelled.cancel()
+        await cancelled.value
+
+        let replacement = ProviderEnablementStore(defaults: defaults)
+        XCTAssertEqual(replacement.detectionJob?.mode, .replacement)
+        let resumed = try XCTUnwrap(NewProviderSeeder.reconcileIfNeeded(
+            providers: providers, enablement: replacement
+        ))
+        await resumed.value
+
+        XCTAssertEqual(replacement.enabledIDs, ["claude", "grok"])
+        XCTAssertNil(replacement.detectionJob)
+    }
+
     func testCancelledFirstRunResumesAdditivelyWithoutUndoingUserChoices() async throws {
         let defaults = makeDefaults("cancelled-first-run-resume")
         let staleEnablement = ProviderEnablementStore(defaults: defaults)
@@ -195,6 +222,28 @@ final class FirstRunSeederTests: XCTestCase {
         XCTAssertEqual(detected, Set(ids), "all probes must be in flight at once, not one after another")
     }
 
+    func testCancellingDetectionAlsoCancelsItsCredentialProbes() async {
+        var probeStarted = false
+        var probeCancelled = false
+        let provider = CredentialStubProvider(id: "claude", probe: {
+            probeStarted = true
+            do {
+                try await Task.sleep(for: .seconds(10))
+                return true
+            } catch {
+                probeCancelled = true
+                return false
+            }
+        })
+        let detection = Task { await FirstRunSeeder.detectLocalProviders([provider]) }
+        while !probeStarted { await Task.yield() }
+
+        detection.cancel()
+        _ = await detection.value
+
+        XCTAssertTrue(probeCancelled)
+    }
+
     // MARK: - OnboardingStore persistence
 
     func testCustomizeHintFlagPersistsAcrossInstances() {
@@ -238,6 +287,11 @@ private final class CredentialStubProvider: ProviderRuntime {
     init(id: String, gate: ProbeGate) {
         self.provider = Provider(id: id, displayName: id.capitalized, icon: .providerMark(id))
         self.hasCredentials = { await gate.arrive() }
+    }
+
+    init(id: String, probe: @escaping @MainActor () async -> Bool) {
+        self.provider = Provider(id: id, displayName: id.capitalized, icon: .providerMark(id))
+        self.hasCredentials = probe
     }
 
     func refresh() async -> ProviderSnapshot {

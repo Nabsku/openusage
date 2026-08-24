@@ -17,6 +17,19 @@ final class MenuBarPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// Reinjection happens inside an observed view so account changes keep the existing AppKit shell.
+private struct AccountRuntimeHost: View {
+    @Environment(AppContainer.self) private var container
+
+    var body: some View {
+        DashboardView()
+            .reduceAnimationsWhenRequested()
+            .environment(container.layout)
+            .environment(container.dataStore)
+            .environment(\.codexResetClaim, container.codexResetClaim)
+    }
+}
+
 /// Owns the menu-bar status item and the panel that shows the dashboard.
 ///
 /// Deliberately not SwiftUI's `MenuBarExtra`: its `.window` panel never became a proper key window for
@@ -61,16 +74,10 @@ final class StatusItemController: NSObject {
 
         let hosting = NSHostingController(
             rootView: AnyView(
-                DashboardView()
-                    // Own the preference outside `DashboardView` so the view can read the resolved
-                    // value while deciding whether to mount its two-page transition structure.
-                    .reduceAnimationsWhenRequested()
+                AccountRuntimeHost()
                     .environment(container)
-                    .environment(container.layout)
-                    .environment(container.dataStore)
                     .environment(container.transparency)
                     .environment(updater)
-                    .environment(\.codexResetClaim, container.codexResetClaim)
             )
         )
         // The host view fills the panel. SwiftUI measures each screen and drives the panel height;

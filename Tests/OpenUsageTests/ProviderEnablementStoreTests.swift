@@ -189,6 +189,20 @@ final class ProviderEnablementStoreTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: "openusage.pendingProviderDetection.v1"))
     }
 
+    func testLegacyPendingChecksMigrateIntoOneAdditiveDetectionJob() {
+        let defaults = makeDefaults("pending-job-migration")
+        defaults.set(["claude"], forKey: "openusage.enabledProviders.v1")
+        defaults.set(["grok", "claude@deadbeef"], forKey: "openusage.pendingProviderDetection.v1")
+
+        let migrated = ProviderEnablementStore(defaults: defaults)
+
+        XCTAssertEqual(migrated.detectionJob?.mode, .additive)
+        XCTAssertEqual(migrated.detectionJob?.baseline, ["claude"])
+        XCTAssertEqual(migrated.pendingDetectionIDs, ["grok", "claude@deadbeef"])
+        XCTAssertNil(defaults.object(forKey: "openusage.pendingProviderDetection.v1"))
+        XCTAssertEqual(ProviderEnablementStore(defaults: defaults).detectionJob, migrated.detectionJob)
+    }
+
     private func makeDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.Enablement.\(name).\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

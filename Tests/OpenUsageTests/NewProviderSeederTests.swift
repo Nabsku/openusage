@@ -86,6 +86,27 @@ final class NewProviderSeederTests: XCTestCase {
         XCTAssertEqual(grok.probeCount, 0)
     }
 
+    func testPersistedFirstRunJobResumesBeforeItsProvidersWereMarkedKnown() async throws {
+        let enablement = seededStore("job-before-known", enabled: ["claude", "codex"], known: [])
+        let providers = [
+            probe("claude", hasCredentials: true),
+            probe("codex", hasCredentials: false),
+            probe("grok", hasCredentials: true),
+        ]
+        enablement.beginProviderDetection(
+            ["claude", "codex", "grok"], mode: .replacement, baseline: ["claude", "codex"]
+        )
+
+        let task = try XCTUnwrap(NewProviderSeeder.reconcileIfNeeded(
+            providers: providers, enablement: enablement
+        ))
+        await task.value
+
+        XCTAssertEqual(enablement.enabledIDs, ["claude", "grok"])
+        XCTAssertEqual(enablement.knownIDs, ["claude", "codex", "grok"])
+        XCTAssertNil(enablement.detectionJob)
+    }
+
     func testUserToggleDuringDetectionWins() async {
         let enablement = seededStore("toggle-wins", enabled: ["claude"], known: ["claude"])
         var enableCallbacks: [String] = []

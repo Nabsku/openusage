@@ -27,11 +27,12 @@ enum FirstRunSeeder {
     ) -> Task<Void, Never>? {
         guard isFreshInstall, enablement.enabledIDs == nil else { return nil }
 
-        // Baseline the known-provider set: everything shipping today has been "seen" by this install,
-        // so `NewProviderSeeder` only ever probes providers added in a later release.
+        // Persist the unfinished job before marking providers known, so an interrupted launch can
+        // still distinguish an outstanding first-run check from a completed one.
+        let task = seedFallbackThenDetect(providers: providers, enablement: enablement, logPrefix: "first run")
         enablement.registerKnownProviders(Set(providers.map(\.provider.id)))
         onboarding.markCustomizeHintPending()
-        return seedFallbackThenDetect(providers: providers, enablement: enablement, logPrefix: "first run")
+        return task
     }
 
     /// Re-runs first-launch detection on demand for the Customize "Reset All" action. Unlike first-run
@@ -65,18 +66,39 @@ enum FirstRunSeeder {
         let providerIDs = Set(providers.map(\.provider.id))
         let fallback = fallbackProviderIDs.intersection(providerIDs)
         enablement.seedEnabledProviders(fallback)
-        enablement.markProviderDetectionPending(providerIDs)
+        enablement.beginProviderDetection(providerIDs, mode: .replacement, baseline: fallback)
         AppLog.info(.config, "\(logPrefix): seeded providers \(fallback.sorted()); \(probeVerb) local credentials")
+        return resumeDetection(providers: providers, enablement: enablement, logPrefix: logPrefix)
+    }
+
+    static func resumeDetection(
+        providers: [ProviderRuntime],
+        enablement: ProviderEnablementStore,
+        logPrefix: String
+    ) -> Task<Void, Never> {
+        let providerIDs = Set(providers.map(\.provider.id)).intersection(enablement.pendingDetectionIDs)
+        let pendingProviders = providers.filter { providerIDs.contains($0.provider.id) }
         return Task {
-            let detected = await detectLocalProviders(providers)
+            let detected = await detectLocalProviders(pendingProviders)
             guard !Task.isCancelled else { return }
             defer { enablement.finishProviderDetection(providerIDs) }
             AppLog.info(.config, "\(logPrefix): detected credentials for \(detected.sorted())")
-            guard enablement.enabledIDs == fallback, !detected.isEmpty else { return }
-            let honoringUserChoices = detected.intersection(enablement.pendingDetectionIDs)
-                .union(fallback.subtracting(enablement.pendingDetectionIDs))
-            guard !honoringUserChoices.isEmpty else { return }
-            enablement.seedEnabledProviders(honoringUserChoices)
+            guard let job = enablement.detectionJob else { return }
+            let pendingDetected = detected.intersection(job.ids)
+
+            switch job.mode {
+            case .replacement:
+                guard enablement.enabledIDs == job.baseline, !pendingDetected.isEmpty else { return }
+                let honoringUserChoices = pendingDetected.union(job.baseline.subtracting(job.ids))
+                enablement.seedEnabledProviders(honoringUserChoices)
+            case .additive:
+                for id in pendingDetected.sorted() {
+                    guard !Task.isCancelled else { return }
+                    guard enablement.pendingDetectionIDs.contains(id), !enablement.isEnabled(id) else { continue }
+                    AppLog.info(.config, "new provider \(id): credentials detected, enabling")
+                    enablement.setEnabled(true, for: id)
+                }
+            }
         }
     }
 
@@ -93,10 +115,15 @@ enum FirstRunSeeder {
         let probes = providers.map { provider in
             (provider.provider.id, Task { await provider.hasLocalCredentials() })
         }
-        var detected = Set<String>()
-        for (id, probe) in probes where await probe.value {
-            detected.insert(id)
+        return await withTaskCancellationHandler {
+            var detected = Set<String>()
+            for (id, probe) in probes {
+                guard !Task.isCancelled else { return detected }
+                if await probe.value { detected.insert(id) }
+            }
+            return detected
+        } onCancel: {
+            for (_, probe) in probes { probe.cancel() }
         }
-        return detected
     }
 }

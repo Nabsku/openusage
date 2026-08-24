@@ -26,37 +26,36 @@ enum NewProviderSeeder {
         // seeded before this shipped — bundled installs get it from the v2 settings migration or
         // `FirstRunSeeder`). Baseline it to the current registry without probing: we can't tell "new"
         // from "user turned it off", so auto-enabling anything here could override a real choice.
-        guard !enablement.knownIDs.isEmpty else {
+        guard !enablement.knownIDs.isEmpty || enablement.detectionJob != nil else {
             enablement.registerKnownProviders(currentIDs)
             return nil
         }
 
-        let newIDs = enablement.registerKnownProviders(currentIDs)
+        let newIDs = currentIDs.subtracting(enablement.knownIDs)
         let pendingIDs = enablement.pendingDetectionIDs.intersection(currentIDs)
         let detectionIDs = newIDs.union(pendingIDs)
         guard !detectionIDs.isEmpty else { return nil }
-        enablement.markProviderDetectionPending(detectionIDs)
+        if let job = enablement.detectionJob,
+           job.mode == .replacement,
+           enablement.enabledIDs == job.baseline
+        {
+            enablement.beginProviderDetection(detectionIDs, mode: .replacement, baseline: job.baseline)
+        } else {
+            enablement.beginProviderDetection(
+                detectionIDs,
+                mode: .additive,
+                baseline: enablement.enabledIDs ?? []
+            )
+        }
+        enablement.registerKnownProviders(currentIDs)
         AppLog.info(
             .config,
             "new or interrupted provider checks: \(detectionIDs.sorted()); probing local credentials"
         )
-
-        return Task {
-            // Same concurrent local-only probe as first-run detection and the Reset All reseed.
-            let newProviders = providers.filter { detectionIDs.contains($0.provider.id) }
-            let detected = await FirstRunSeeder.detectLocalProviders(newProviders)
-            guard !Task.isCancelled else { return }
-            defer { enablement.finishProviderDetection(detectionIDs) }
-            for id in detected.sorted() {
-                guard !Task.isCancelled else { return }
-                // The probe takes a moment; if the user already turned the provider on themselves,
-                // or explicitly toggled it back off, their choice cancels its pending detection.
-                guard enablement.pendingDetectionIDs.contains(id),
-                      !enablement.isEnabled(id)
-                else { continue }
-                AppLog.info(.config, "new provider \(id): credentials detected, enabling")
-                enablement.setEnabled(true, for: id)
-            }
-        }
+        return FirstRunSeeder.resumeDetection(
+            providers: providers,
+            enablement: enablement,
+            logPrefix: "new or interrupted provider checks"
+        )
     }
 }
