@@ -9,6 +9,7 @@ final class AccountRuntimeGraph {
         let registry: WidgetRegistry
         let layout: LayoutStore
         let dataStore: WidgetDataStore
+        let snapshotCache: ProviderSnapshotCache
         let iCloudSync: ICloudUsageSyncStore
         let providers: [ProviderRuntime]
         let apiKeyProviders: [any APIKeyManaging]
@@ -25,6 +26,7 @@ final class AccountRuntimeGraph {
     }
 
     func retireCurrentState() {
+        state.dataStore.retireForAccountGraphReload()
         runtimeTasks = nil
         resetDetection = nil
         state.iCloudSync.shutdownForAccountGraphReload()

@@ -40,18 +40,28 @@ final class AccountRuntimeLifecycleTests: XCTestCase {
         XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
     }
 
-    func testSessionRootChangesNeverChangeAccountOwnershipFingerprint() {
+    func testAnySessionRootChangeInvalidatesAccountRuntimeFingerprint() {
         let account = ClaudeAccountCard(
             id: "claude@team", displayName: "Team", identityKey: "person|team",
             credential: .desktop(organization: "team"),
             logRoots: [URL(fileURLWithPath: "/tmp/session-one")]
         )
-        var updated = account
-        updated.logRoots.append(URL(fileURLWithPath: "/tmp/session-two"))
-        let first = ProviderAccountAssembly(identityKeysByCard: [account.id: account.identityKey], claudeCards: [account])
-        let second = ProviderAccountAssembly(identityKeysByCard: [updated.id: updated.identityKey], claudeCards: [updated])
+        let first = ProviderAccountAssembly(
+            identityKeysByCard: [account.id: account.identityKey], claudeCards: [account],
+            defaultClaudeExtraLogRoots: [URL(fileURLWithPath: "/tmp/default-config")],
+            defaultClaudeCoworkRoots: [URL(fileURLWithPath: "/tmp/default-cowork")]
+        )
+        var updatedCard = first
+        updatedCard.claudeCards[0].logRoots.append(URL(fileURLWithPath: "/tmp/session-two"))
+        var updatedConfig = first
+        updatedConfig.defaultClaudeExtraLogRoots.append(URL(fileURLWithPath: "/tmp/another-config"))
+        var updatedCowork = first
+        updatedCowork.defaultClaudeCoworkRoots?.append(URL(fileURLWithPath: "/tmp/another-cowork"))
+        let original = AppContainer.AccountOwnershipFingerprint(first)
 
-        XCTAssertEqual(AppContainer.AccountOwnershipFingerprint(first), .init(second))
+        XCTAssertNotEqual(original, .init(updatedCard))
+        XCTAssertNotEqual(original, .init(updatedConfig))
+        XCTAssertNotEqual(original, .init(updatedCowork))
     }
 
     func testCancellationAfterConfigScanNeverRunsCoworkDiscovery() async {
@@ -65,5 +75,81 @@ final class AccountRuntimeLifecycleTests: XCTestCase {
 
         XCTAssertEqual(prepared.config.notes, ["config scanned"])
         XCTAssertTrue(prepared.cowork.truncated)
+    }
+
+    func testRetiredRefreshNeverOverwritesReplacementSnapshot() async {
+        let suiteName = "OpenUsageTests.RetiredAccountRuntime.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let provider = Provider(id: "claude", displayName: "Claude", icon: .providerMark("claude"))
+        let oldSnapshot = ProviderSnapshot(providerID: provider.id, displayName: "Old Account", lines: [])
+        let newSnapshot = ProviderSnapshot(providerID: provider.id, displayName: "New Account", lines: [])
+        let oldRuntime = DeferredSnapshotRuntime(provider: provider, snapshot: oldSnapshot)
+        let registry = WidgetRegistry(providers: [provider], descriptors: [])
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "handoff")
+        let oldStore = WidgetDataStore(registry: registry, providers: [oldRuntime], cache: cache, defaults: defaults)
+        let oldRefresh = Task { await oldStore.refresh(providerID: provider.id, force: true) }
+        while !oldRuntime.isWaiting { await Task.yield() }
+
+        oldStore.retireForAccountGraphReload()
+        let replacementRuntime = TestProviderRuntime(provider: provider, descriptors: [], snapshot: newSnapshot)
+        let replacementStore = WidgetDataStore(
+            registry: registry, providers: [replacementRuntime], cache: cache, defaults: defaults
+        )
+        let replacementOutcome = await replacementStore.refresh(providerID: provider.id, force: true)
+        oldRuntime.complete()
+        let retiredOutcome = await oldRefresh.value
+
+        XCTAssertEqual(replacementOutcome, .refreshed)
+        XCTAssertEqual(retiredOutcome, .skipped)
+        let persisted = ProviderSnapshotCache(userDefaults: defaults, storageKey: "handoff")
+        XCTAssertEqual(persisted.loadSnapshots(providerIDs: [provider.id])[provider.id]?.displayName, "New Account")
+    }
+
+    func testCancellingRefreshBatchCancelsOutstandingProviderWork() async {
+        let suiteName = "OpenUsageTests.CancelledAccountRuntime.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let provider = Provider(id: "claude", displayName: "Claude", icon: .providerMark("claude"))
+        let runtime = HangingProviderRuntime(provider: provider, descriptors: [])
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: []),
+            providers: [runtime], cache: ProviderSnapshotCache(userDefaults: defaults), defaults: defaults
+        )
+        let refresh = Task { await store.refreshAll(force: true) }
+        while store.refreshingProviderIDs.isEmpty { await Task.yield() }
+
+        store.retireForAccountGraphReload()
+        refresh.cancel()
+        await refresh.value
+
+        XCTAssertTrue(runtime.wasCancelled)
+        XCTAssertNil(store.lastRefreshAt)
+        let retiredOutcome = await store.refresh(providerID: provider.id, force: true)
+        XCTAssertEqual(retiredOutcome, .skipped)
+    }
+}
+
+@MainActor
+private final class DeferredSnapshotRuntime: ProviderRuntime {
+    let provider: Provider
+    let widgetDescriptors: [WidgetDescriptor] = []
+    private let snapshot: ProviderSnapshot
+    private var continuation: CheckedContinuation<ProviderSnapshot, Never>?
+
+    var isWaiting: Bool { continuation != nil }
+
+    init(provider: Provider, snapshot: ProviderSnapshot) {
+        self.provider = provider
+        self.snapshot = snapshot
+    }
+
+    func refresh() async -> ProviderSnapshot {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func complete() {
+        continuation?.resume(returning: snapshot)
+        continuation = nil
     }
 }

@@ -172,7 +172,8 @@ final class AppContainer {
         assembly: ProviderAccountAssembly,
         accounts: ProviderAccountsStore,
         enablement: ProviderEnablementStore,
-        notificationSettings: NotificationSettingsStore
+        notificationSettings: NotificationSettingsStore,
+        snapshotCache: ProviderSnapshotCache = ProviderSnapshotCache()
     ) -> AccountRuntimeGraph.State {
         let providers = ProviderCatalog.make(
             claudeCards: assembly.claudeCards,
@@ -194,6 +195,7 @@ final class AppContainer {
         let dataStore = WidgetDataStore(
             registry: registry,
             providers: providers,
+            cache: snapshotCache,
             isProviderEnabled: { [enablement] in enablement.isEnabled($0) },
             orderedDescriptors: { [layout] in layout.visiblePlaced.compactMap { layout.descriptor(for: $0) } },
             notificationSettings: { notificationSettings },
@@ -242,6 +244,7 @@ final class AppContainer {
             registry: registry,
             layout: layout,
             dataStore: dataStore,
+            snapshotCache: snapshotCache,
             iCloudSync: iCloudSync,
             providers: providers,
             apiKeyProviders: providers.compactMap { $0 as? any APIKeyManaging },
@@ -276,10 +279,12 @@ final class AppContainer {
 
     private func replaceAccountRuntime(with assembly: ProviderAccountAssembly) {
         let previousScreen = layout.screen
+        let snapshotCache = accountGraph.state.snapshotCache
         accountGraph.retireCurrentState()
         let replacement = Self.makeAccountRuntime(
             assembly: assembly, accounts: accounts,
-            enablement: enablement, notificationSettings: notificationSettings
+            enablement: enablement, notificationSettings: notificationSettings,
+            snapshotCache: snapshotCache
         )
         replacement.layout.screen = previousScreen
         replacement.dataStore.onRefreshOutcome = { [weak telemetry] providerID, outcome, category, manual in
@@ -299,10 +304,13 @@ final class AppContainer {
             var identityKey: String
             var verifiedIdentityAliases: Set<ClaudeIdentity>
             var credential: ClaudeAccountCard.Credential
+            var logRoots: Set<URL>
         }
 
         var identities: [String: String]
         var cards: [Card]
+        var defaultClaudeExtraLogRoots: Set<URL>
+        var defaultClaudeCoworkRoots: Set<URL>?
         var allowsUnboundClaudeFallback: Bool
         var defaultClaudeVerifiedIdentityAliases: Set<ClaudeIdentity>
         var desktopAccess: ClaudeDesktopAccessPolicy
@@ -312,9 +320,12 @@ final class AppContainer {
             cards = assembly.claudeCards.map {
                 Card(
                     id: $0.id, identityKey: $0.identityKey,
-                    verifiedIdentityAliases: $0.verifiedIdentityAliases, credential: $0.credential
+                    verifiedIdentityAliases: $0.verifiedIdentityAliases, credential: $0.credential,
+                    logRoots: Set($0.logRoots)
                 )
             }
+            defaultClaudeExtraLogRoots = Set(assembly.defaultClaudeExtraLogRoots)
+            defaultClaudeCoworkRoots = assembly.defaultClaudeCoworkRoots.map { Set($0) }
             allowsUnboundClaudeFallback = assembly.allowsUnboundClaudeFallback
             defaultClaudeVerifiedIdentityAliases = assembly.defaultClaudeVerifiedIdentityAliases
             desktopAccess = assembly.defaultClaudeDesktopAccess

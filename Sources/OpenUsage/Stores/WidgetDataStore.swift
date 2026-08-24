@@ -94,6 +94,7 @@ final class WidgetDataStore {
     /// Per-provider earliest next-probe time after a failure (see `failureRetryBackoff`). Not part of
     /// observable UI state, so it's excluded from `@Observable` tracking.
     @ObservationIgnored private var failureRetryAfter: [String: Date] = [:]
+    @ObservationIgnored private var isRetiredForAccountGraphReload = false
 
     /// Owns the quota pace-notification subsystem (dedup state, fire/deliver decision, trace). This store
     /// just gathers each pass's enabled bounded metrics and delegates.
@@ -224,6 +225,7 @@ final class WidgetDataStore {
     /// `force` bypasses the snapshot cache (the manual "refresh now" path); the periodic loop keeps
     /// honoring it.
     func refreshAll(force: Bool = false) async {
+        guard !isRetiredForAccountGraphReload, !Task.isCancelled else { return }
         // `Task {}` from MainActor context inherits the isolation (a task-group child can't capture
         // the non-Sendable store), so: fire one task per provider, then await them all.
         let providerIDs = registry.providers.map(\.id).filter { isProviderEnabled($0) }
@@ -232,11 +234,17 @@ final class WidgetDataStore {
         let tasks = providerIDs.map { providerID in
             Task { await self.refresh(providerID: providerID, force: force, notifyHistoryChange: false) }
         }
-        var outcomes: [RefreshOutcome] = []
-        outcomes.reserveCapacity(tasks.count)
-        for task in tasks {
-            outcomes.append(await task.value)
+        let outcomes = await withTaskCancellationHandler {
+            var outcomes: [RefreshOutcome] = []
+            outcomes.reserveCapacity(tasks.count)
+            for task in tasks {
+                outcomes.append(await task.value)
+            }
+            return outcomes
+        } onCancel: {
+            tasks.forEach { $0.cancel() }
         }
+        guard !Task.isCancelled, !isRetiredForAccountGraphReload else { return }
         // Stamp the end of the pass so the footer countdown targets the next scheduled refresh
         // (this time + one refresh interval), mirroring the periodic loop that sleeps one interval
         // after each pass.
@@ -250,6 +258,10 @@ final class WidgetDataStore {
         let backedOff = outcomes.count { $0 == .backedOff }
         if refreshed > 0 { onLocalHistoryChanged?() }
         AppLog.info(.refresh, "batch end (\(durationMs)ms, \(refreshed) ok / \(failed) failed / \(cached) cached / \(backedOff) backed off)")
+    }
+
+    func retireForAccountGraphReload() {
+        isRetiredForAccountGraphReload = true
     }
 
     /// Evaluate every visible, enabled metric for a quota pace milestone and post a notification for any
@@ -305,7 +317,9 @@ final class WidgetDataStore {
         force: Bool = false,
         notifyHistoryChange: Bool = true
     ) async -> RefreshOutcome {
-        guard isProviderEnabled(providerID) else { return .skipped }
+        guard !isRetiredForAccountGraphReload, !Task.isCancelled, isProviderEnabled(providerID) else {
+            return .skipped
+        }
         // A TTL-fresh entry that provably belongs to another account (swap since it was written) must
         // not short-circuit the refresh — under persisted freshness (the one-shot CLI) it would copy
         // the previous account's snapshot back in. Treat it as a miss so the fetch overwrites it.
@@ -349,6 +363,7 @@ final class WidgetDataStore {
             force: force,
             timeout: providerRefreshTimeout
         ) else {
+            guard !Task.isCancelled, !isRetiredForAccountGraphReload else { return .skipped }
             providerErrors[providerID] = "Refresh timed out after \(Int(providerRefreshTimeout))s"
             failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
             AppLog.warn(.refresh, "\(providerID) timed out after \(Int(providerRefreshTimeout))s")
@@ -357,7 +372,7 @@ final class WidgetDataStore {
         }
         // A canceled refresh may still return if a provider's underlying work is non-throwing. Never
         // publish that potentially partial snapshot; keep the last-good state exactly as it was.
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled, !isRetiredForAccountGraphReload else {
             AppLog.debug(.refresh, "cancelled \(providerID) refresh; keeping last-good snapshot")
             return .skipped
         }
