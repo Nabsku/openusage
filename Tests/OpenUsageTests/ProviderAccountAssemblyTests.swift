@@ -241,6 +241,41 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(assembly.defaultClaudeExtraLogRoots.map(\.path), ["/Users/dev/.claude-work"])
     }
 
+    func testAliasedConfigDirectoriesProduceOneStableNonDefaultAccountCard() throws {
+        let defaults = makeScratchDefaults()
+        let records = [
+            ProviderAccountRecord(
+                id: "claude", family: "claude", identityKey: "default", label: nil,
+                sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+            ),
+            ProviderAccountRecord(
+                id: "claude@work", family: "claude", identityKey: "work|org",
+                identityAliases: ["work"], label: "Work", sources: []
+            ),
+        ]
+        defaults.set(try JSONEncoder().encode(records), forKey: ProviderAccountsStore.storageKey)
+        let store = ProviderAccountsStore(defaults: defaults)
+        let observer = DefaultAccountObserver(
+            files: FakeFiles(["/Users/dev/.claude.json":
+                #"{"oauthAccount":{"accountUuid":"default"}}"#]),
+            keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let paths = ["/Users/dev/.claude-work-a", "/Users/dev/.claude-work-b"]
+        let discovery = makeDiscovery(files: [
+            paths[0] + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work"}}"#,
+            paths[1] + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work","organizationUuid":"org"}}"#,
+            paths[0] + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"a"}}"#,
+            paths[1] + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"b"}}"#,
+        ], subdirectories: paths)
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer, accountsStore: store, claudeDiscovery: discovery
+        )
+
+        XCTAssertEqual(assembly.claudeCards.map(\.id), ["claude@work"])
+        XCTAssertEqual(assembly.claudeCards.first?.identityKey, "work")
+    }
+
     func testNoDefaultLoginStillAcceptsAConfigDirOnlyAccount() throws {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)

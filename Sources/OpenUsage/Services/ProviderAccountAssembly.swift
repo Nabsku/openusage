@@ -160,8 +160,18 @@ struct ProviderAccountAssembly {
                 var order: [String] = []
                 var grouped: [String: [ClaudeConfigDirDiscovery.Finding]] = [:]
                 for finding in scan.findings where isClaudeDiscoveryComplete {
-                    if grouped[finding.identityKey] == nil { order.append(finding.identityKey) }
-                    grouped[finding.identityKey, default: []].append(finding)
+                    let records = accountsStore.records.filter {
+                        $0.family == "claude" && $0.matches(identityKey: finding.identityKey)
+                    }
+                    guard records.count <= 1 else {
+                        isClaudeDiscoveryComplete = false
+                        order.removeAll()
+                        grouped.removeAll()
+                        break
+                    }
+                    let identityKey = records.first?.identityKey ?? finding.identityKey
+                    if grouped[identityKey] == nil { order.append(identityKey) }
+                    grouped[identityKey, default: []].append(finding)
                 }
                 for identityKey in order {
                     var findings = grouped[identityKey] ?? []
@@ -205,7 +215,7 @@ struct ProviderAccountAssembly {
                             label: findings.first?.label,
                             sources: sources
                         ))
-                        foundClaudeAccounts.append((identityKey, findings.first?.label, findings))
+                        foundClaudeAccounts.append((findings[0].identityKey, findings[0].label, findings))
                     }
                 }
             }
