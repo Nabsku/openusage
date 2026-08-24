@@ -43,6 +43,36 @@ final class UsageHistoryDocumentTests: XCTestCase {
         XCTAssertThrowsError(try document.validate())
     }
 
+    func testRejectsInvalidDuplicateAndUnboundAccountIdentities() {
+        var document = makeDocument(deviceID: "mac-a", updatedAt: .now)
+        for invalid in ["", "/Users/alice/.claude", "account with spaces"] {
+            document.identities = ["claude": invalid]
+            XCTAssertThrowsError(try document.validate())
+        }
+
+        document.identities = ["codex": "missing-provider"]
+        XCTAssertThrowsError(try document.validate())
+
+        document.providers["claude@ab12cd34"] = document.providers["claude"]
+        document.identities = ["claude": "shared-account", "claude@ab12cd34": "shared-account"]
+        XCTAssertThrowsError(try document.validate()) { error in
+            guard case .duplicateIdentity = error as? UsageHistoryDocumentError else {
+                return XCTFail("expected duplicate account identity, got \(error)")
+            }
+        }
+    }
+
+    func testAccountCardsRequireIdentitiesAndLegacyDocumentsRejectThem() {
+        var document = makeDocument(deviceID: "mac-a", updatedAt: .now)
+        document.providers["claude@ab12cd34"] = document.providers["claude"]
+        XCTAssertThrowsError(try document.validate())
+
+        document.providers["claude@ab12cd34"] = nil
+        document.schema = UsageHistoryDocument.legacySchemaV1
+        document.identities = ["claude": "account-a"]
+        XCTAssertThrowsError(try document.validate())
+    }
+
     func testNewestDocumentWinsForDuplicateMachine() {
         let old = makeDocument(deviceID: "same-mac", updatedAt: Date(timeIntervalSince1970: 100))
         let newest = makeDocument(deviceID: "same-mac", updatedAt: Date(timeIntervalSince1970: 200))

@@ -63,10 +63,11 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertTrue(remapped.histories.isEmpty)
         XCTAssertEqual(remapped.remoteOnly.count, 1)
         XCTAssertEqual(remapped.remoteOnly.first?.family, "claude")
-        XCTAssertEqual(remapped.remoteOnly.first?.deviceNames, ["Mac mini"])
+        XCTAssertEqual(remapped.remoteOnly.first?.cardID,
+                       ProviderAccountID.make(family: "claude", identityKey: "uuid-other|org-x"))
     }
 
-    func testRemapLegacyV1DocumentKeepsSameCardMerge() {
+    func testRemapLegacyAccountHistoryWithoutIdentityIsQuarantined() {
         let v1 = UsageHistoryDocument(
             schema: UsageHistoryDocument.legacySchemaV1,
             deviceID: "d", deviceName: "old Mac", updatedAt: Date(),
@@ -77,8 +78,47 @@ final class PeerHistoryIdentityTests: XCTestCase {
             documents: [v1],
             localIdentityByCardID: ["claude": maxKey]
         )
-        XCTAssertEqual(remapped.histories.first?.cardID, "claude")
+        XCTAssertTrue(remapped.histories.isEmpty)
+        XCTAssertEqual(remapped.quarantined.first?.reason, .missingPeerIdentity)
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
+    }
+
+    func testDifferentProviderFamiliesCannotShareAnIdentity() {
+        let document = makeDocument(
+            providers: ["codex": history(day: "2026-07-16", tokens: 10, cost: 1)],
+            identities: ["codex": maxKey]
+        )
+        let result = PeerHistoryRemapper.remap(
+            documents: [document],
+            localIdentityByCardID: ["claude": maxKey],
+            localAccountCardIDs: ["claude", "codex"]
+        )
+        XCTAssertTrue(result.histories.isEmpty)
+        XCTAssertEqual(result.quarantined.first?.reason, .unresolvedLocalIdentity)
+    }
+
+    func testAmbiguousLocalAndPeerOwnershipAreQuarantined() {
+        let document = makeDocument(
+            providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
+            identities: ["claude": maxKey]
+        )
+        let local = PeerHistoryRemapper.remap(
+            documents: [document],
+            localIdentityByCardID: ["claude": maxKey, "claude@12345678": maxKey]
+        )
+        XCTAssertEqual(local.quarantined.first?.reason, .ambiguousLocalIdentity)
+
+        let duplicate = makeDocument(
+            providers: [
+                "claude": history(day: "2026-07-16", tokens: 10, cost: 1),
+                "claude@12345678": history(day: "2026-07-16", tokens: 20, cost: 2),
+            ],
+            identities: ["claude": maxKey, "claude@12345678": maxKey]
+        )
+        let peer = PeerHistoryRemapper.remap(
+            documents: [duplicate], localIdentityByCardID: ["claude": maxKey]
+        )
+        XCTAssertEqual(peer.quarantined.map(\.reason), [.ambiguousPeerIdentity, .ambiguousPeerIdentity])
     }
 
     func testLocalDocumentPublishesAccountCardsWithIdentities() {
@@ -117,7 +157,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
             providers: [],
             cache: scratchCache(),
             defaults: makeScratchDefaults("RemoteTotal"),
-            providerIdentityKeys: ["claude": maxKey]
+            providerIdentityKeys: ["claude": maxKey, "claude@f15456b0": teamKey]
         )
         let today = dayKey(Date())
         let doc = makeDocument(
@@ -129,7 +169,8 @@ final class PeerHistoryIdentityTests: XCTestCase {
 
         XCTAssertEqual(dataStore.remoteOnlySpend.count, 1)
         let entry = dataStore.remoteOnlySpend[0]
-        XCTAssertEqual(entry.provider.displayName, "Claude · Mac mini")
+        XCTAssertEqual(entry.provider.displayName,
+                       ProviderAccountID.make(family: "claude", identityKey: "uuid-other|org-x"))
 
         let total = TotalSpendAggregator.total(
             for: .today,
@@ -146,7 +187,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
             providers: [],
             cache: scratchCache(),
             defaults: makeScratchDefaults("ClearPeers"),
-            providerIdentityKeys: ["claude": maxKey]
+            providerIdentityKeys: ["claude": maxKey, "claude@f15456b0": teamKey]
         )
         let doc = makeDocument(
             deviceName: "Mac mini",
