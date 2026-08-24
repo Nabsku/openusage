@@ -49,6 +49,15 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
         )
         XCTAssertEqual(fixture.store.lastKnownAccountUUID(), account)
+
+        var loggedOut = fixture.store
+        loggedOut.sqlite = FakeClaudeDesktopSQLite(value: nil)
+        XCTAssertTrue(loggedOut.hasCredentialMaterial())
+        let pinned = loggedOut.load(allowInteraction: false, organization: organization)
+        XCTAssertEqual(pinned.status, .invalid)
+        XCTAssertNil(pinned.oauth)
+        XCTAssertEqual(loggedOut.lastKnownAccountUUID(), account)
+
         fixture.files.files.removeValue(forKey: home.appendingPathComponent(
             "Library/Application Support/Claude/Cookies"
         ).path)

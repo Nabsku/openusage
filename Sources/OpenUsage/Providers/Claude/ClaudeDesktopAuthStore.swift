@@ -147,14 +147,10 @@ struct ClaudeDesktopAuthStore: Sendable {
             guard let key = try safeStorageKey(allowInteraction: allowInteraction) else {
                 return ClaudeDesktopCredentialResult(oauth: nil, status: .notFound)
             }
-            let targetOrganization: String
-            if let organization {
-                targetOrganization = organization.lowercased()
-            } else if let activeOrg = try loadActiveOrganization(key: key) {
-                targetOrganization = activeOrg
-            } else {
+            guard let activeOrganization = try loadActiveOrganization(key: key) else {
                 return ClaudeDesktopCredentialResult(oauth: nil, status: .invalid)
             }
+            let targetOrganization = organization?.lowercased() ?? activeOrganization
             guard let caches = try loadCaches(key: key) else {
                 return ClaudeDesktopCredentialResult(oauth: nil, status: .invalid)
             }
