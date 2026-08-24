@@ -342,7 +342,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertNoThrow(try document.validate())
     }
 
-    func testCodexHistoryStaysLocalWhileClaudeStillSyncsBothWays() throws {
+    func testCodexAndClaudeHistoriesSyncForTheirVerifiedAccounts() throws {
         let existing = makeRegistry()
         let codex = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))
         let codexDescriptor = WidgetDescriptor.usageTrend(provider: codex)
@@ -374,8 +374,8 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
 
         let outgoing = dataStore.localHistoryDocument(deviceID: "this-mac", deviceName: "This Mac")
-        XCTAssertEqual(Set(outgoing.providers.keys), ["claude"])
-        XCTAssertEqual(outgoing.identities, ["claude": maxKey])
+        XCTAssertEqual(Set(outgoing.providers.keys), ["claude", "codex"])
+        XCTAssertEqual(outgoing.identities, ["claude": maxKey, "codex": "codex-local"])
         XCTAssertNoThrow(try outgoing.validate())
 
         let incoming = makeDocument(
@@ -387,7 +387,8 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         dataStore.setPeerHistoryDocuments([incoming], ownDeviceID: "this-mac")
 
-        XCTAssertEqual(dataStore.snapshots["codex"], codexSnapshot)
+        XCTAssertNotEqual(dataStore.snapshots["codex"], codexSnapshot)
+        XCTAssertNotNil(dataStore.snapshots["codex"]?.line(label: "Today"))
         XCTAssertNotNil(dataStore.snapshots["claude"]?.line(label: "Today"))
         XCTAssertTrue(dataStore.remoteOnlySpend.isEmpty)
     }

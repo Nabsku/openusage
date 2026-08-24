@@ -272,7 +272,8 @@ final class CodexResetClaimTests: XCTestCase {
         }
         let service = CodexResetClaimService(
             usageClient: CodexUsageClient(http: http),
-            credentialCandidates: { [("stale-token", "acct-old"), ("live-token", "acct-456")] }
+            credentialCandidates: { [("stale-token", "acct-456"), ("live-token", "acct-456")] },
+            expectedIdentityKey: "acct-456"
         )
 
         let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
@@ -282,11 +283,7 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertEqual(consume.headers["Authorization"], "Bearer live-token")
     }
 
-    func testConsumeFallsBackToSameTokenDifferentAccountCandidate() async throws {
-        // ChatGPT-Account-Id changes what a token is authorized for: a same-token candidate with a
-        // different account is a distinct fallback and must not be deduplicated away. The list fetch
-        // authenticates with account A, the consume is rejected for A and must retry with account B —
-        // safe, because both attempts carry the same idempotency key.
+    func testConsumeNeverFallsBackToAnotherAccount() async throws {
         let http = RoutingHTTPClient { request in
             switch request.url {
             case CodexUsageClient.resetCreditsURL:
@@ -302,14 +299,33 @@ final class CodexResetClaimTests: XCTestCase {
         }
         let service = CodexResetClaimService(
             usageClient: CodexUsageClient(http: http),
-            credentialCandidates: { [("shared-token", "acct-A"), ("shared-token", "acct-B")] }
+            credentialCandidates: { [("shared-token", "acct-A"), ("shared-token", "acct-B")] },
+            expectedIdentityKey: "acct-A"
         )
 
         let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
 
-        XCTAssertEqual(outcome, .success)
+        XCTAssertEqual(outcome, .failed)
         let consume = try XCTUnwrap(http.requests.last)
-        XCTAssertEqual(consume.headers["ChatGPT-Account-Id"], "acct-B")
+        XCTAssertEqual(consume.headers["ChatGPT-Account-Id"], "acct-A")
+        XCTAssertEqual(http.requests.count, 2, "the other account must receive neither a GET nor a POST")
+    }
+
+    func testClaimFailsWithoutRequestsAfterAccountSwitch() async {
+        let http = RoutingHTTPClient { _ in
+            XCTFail("a switched account must never receive the previous account's request")
+            return HTTPResponse(statusCode: 200, headers: [:], body: Data())
+        }
+        let service = CodexResetClaimService(
+            usageClient: CodexUsageClient(http: http),
+            credentialCandidates: { [("new-account-token", "acct-B")] },
+            expectedIdentityKey: "acct-A"
+        )
+
+        let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
+
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertTrue(http.requests.isEmpty)
     }
 
     func testClaimFailsWhenEveryCandidateIsRejected() async {

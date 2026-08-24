@@ -476,16 +476,6 @@ final class WidgetDataStore {
     func setPeerHistoryDocuments(_ documents: [UsageHistoryDocument], ownDeviceID: String) {
         peerHistoryDocuments = UsageHistoryDocument.newestByDevice(documents)
             .filter { $0.deviceID != ownDeviceID }
-            .map { document in
-                var document = document
-                document.providers = document.providers.filter {
-                    ProviderAccountID.family(of: $0.key) != "codex"
-                }
-                document.identities = document.identities?.filter {
-                    ProviderAccountID.family(of: $0.key) != "codex"
-                }
-                return document
-            }
         rebuildRenderedSnapshots()
     }
 
@@ -504,7 +494,6 @@ final class WidgetDataStore {
         // `PeerHistoryRemapper`).
         for (providerID, descriptor) in registry.historyDescriptorsByProvider
         where descriptor.scope == .machineLocal
-            && ProviderAccountID.family(of: providerID) != "codex"
             && isProviderEnabled(providerID)
         {
             if let history = localSnapshots[providerID]?.usageHistory {
@@ -556,7 +545,7 @@ final class WidgetDataStore {
         let enabledDescriptors = registry.historyDescriptorsByProvider.reduce(
             into: [String: UsageHistoryDescriptor]()
         ) { result, entry in
-            if ProviderAccountID.family(of: entry.key) != "codex", isProviderEnabled(entry.key) {
+            if isProviderEnabled(entry.key) {
                 result[entry.key] = entry.value
             }
         }

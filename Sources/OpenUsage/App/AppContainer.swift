@@ -175,19 +175,7 @@ final class AppContainer {
         notificationSettings: NotificationSettingsStore,
         snapshotCache: ProviderSnapshotCache = ProviderSnapshotCache()
     ) -> AccountRuntimeGraph.State {
-        let providers = ProviderCatalog.make(
-            claudeCards: assembly.claudeCards,
-            defaultClaudeExtraLogRoots: assembly.defaultClaudeExtraLogRoots,
-            defaultClaudeDisplayName: assembly.defaultClaudeDisplayName,
-            defaultClaudeCardID: assembly.defaultClaudeCardID,
-            defaultClaudeVerifiedIdentityAliases: assembly.defaultClaudeVerifiedIdentityAliases,
-            claudeIdentityKeys: assembly.identityKeysByCard,
-            allowsUnboundClaudeFallback: assembly.allowsUnboundClaudeFallback,
-            isClaudeDiscoveryComplete: assembly.isClaudeDiscoveryComplete,
-            allowsUnownedClaudeDesktopFallback: assembly.allowsUnownedClaudeDesktopFallback,
-            defaultClaudeCoworkRoots: assembly.defaultClaudeCoworkRoots,
-            defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
-        )
+        let providers = ProviderCatalog.make(accountAssembly: assembly)
         let registry = WidgetRegistry.from(providers)
         let layout = LayoutStore(
             registry: registry, isProviderEnabled: { [enablement] in enablement.isEnabled($0) }
@@ -217,6 +205,7 @@ final class AppContainer {
             CodexResetClaimService(
                 authStore: codex.authStore,
                 usageClient: codex.usageClient,
+                expectedIdentityKey: codex.expectedIdentityKey,
                 refreshAfterClaim: { [weak dataStore] in
                     var failures = 0
                     for attempt in 0..<45 {

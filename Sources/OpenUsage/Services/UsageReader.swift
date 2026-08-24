@@ -58,18 +58,7 @@ public struct UsageReader {
             ? ProviderAccountAssembly.make(defaults: defaults, waitsForLoginShell: false)
             : ProviderAccountAssembly(identityKeysByCard: [:])
         let providers = providersOverride ?? ProviderCatalog.make(
-            defaults: defaults,
-            claudeCards: accountAssembly.claudeCards,
-            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
-            defaultClaudeDisplayName: accountAssembly.defaultClaudeDisplayName,
-            defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
-            defaultClaudeVerifiedIdentityAliases: accountAssembly.defaultClaudeVerifiedIdentityAliases,
-            claudeIdentityKeys: accountAssembly.identityKeysByCard,
-            allowsUnboundClaudeFallback: accountAssembly.allowsUnboundClaudeFallback,
-            isClaudeDiscoveryComplete: accountAssembly.isClaudeDiscoveryComplete,
-            allowsUnownedClaudeDesktopFallback: accountAssembly.allowsUnownedClaudeDesktopFallback,
-            defaultClaudeCoworkRoots: accountAssembly.defaultClaudeCoworkRoots,
-            defaultClaudeDesktopAccess: accountAssembly.defaultClaudeDesktopAccess
+            defaults: defaults, accountAssembly: accountAssembly
         )
         let registry = WidgetRegistry.from(providers)
         let knownIDs = Set(registry.providers.map(\.id))

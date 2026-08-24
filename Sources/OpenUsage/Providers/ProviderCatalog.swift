@@ -4,6 +4,26 @@ import Foundation
 /// their runtimes here so credentials, refresh behavior, pricing, and normalization can never drift.
 @MainActor
 enum ProviderCatalog {
+    static func make(
+        defaults: UserDefaults = .standard,
+        accountAssembly: ProviderAccountAssembly
+    ) -> [ProviderRuntime] {
+        make(
+            defaults: defaults,
+            claudeCards: accountAssembly.claudeCards,
+            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
+            defaultClaudeDisplayName: accountAssembly.defaultClaudeDisplayName,
+            defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
+            defaultClaudeVerifiedIdentityAliases: accountAssembly.defaultClaudeVerifiedIdentityAliases,
+            claudeIdentityKeys: accountAssembly.identityKeysByCard,
+            allowsUnboundClaudeFallback: accountAssembly.allowsUnboundClaudeFallback,
+            isClaudeDiscoveryComplete: accountAssembly.isClaudeDiscoveryComplete,
+            allowsUnownedClaudeDesktopFallback: accountAssembly.allowsUnownedClaudeDesktopFallback,
+            defaultClaudeCoworkRoots: accountAssembly.defaultClaudeCoworkRoots,
+            defaultClaudeDesktopAccess: accountAssembly.defaultClaudeDesktopAccess
+        )
+    }
+
     /// `claudeCards` carries the extra Claude account cards found by the launch account pass
     /// (`ProviderAccountAssembly`). Each becomes an ordinary runtime inserted right after the default
     /// Claude card, with credentials and usage logs pinned to exactly its own config dir. The empty

@@ -29,22 +29,25 @@ final class CodexResetClaimService {
 
     private let usageClient: CodexUsageClient
     private let credentialCandidates: () async -> [Credentials]
+    private let expectedIdentityKey: String?
     private let refreshAfterClaim: () async -> Void
     /// The credit id each idempotency key was matched to, kept for the key's retries: if a consume
     /// succeeded but its response was lost, the credit is gone from a re-fetched list — a fresh match
     /// would misread the retry as "no longer available" instead of replaying the POST and letting the
     /// server answer `already_redeemed`. Session-lived, keyed by the popover's per-credit UUIDs.
-    private var matchedCreditIDs: [String: String] = [:]
+    private var matchedCredits: [String: (id: String, credentials: Credentials)] = [:]
 
     /// Test seam: injected credential candidates and refresh hook, the same `usageClient` the requests
     /// go through. Candidates are tried in order until one authenticates (see `claim`).
     init(
         usageClient: CodexUsageClient,
         credentialCandidates: @escaping () async -> [Credentials],
+        expectedIdentityKey: String? = nil,
         refreshAfterClaim: @escaping () async -> Void = {}
     ) {
         self.usageClient = usageClient
         self.credentialCandidates = credentialCandidates
+        self.expectedIdentityKey = expectedIdentityKey
         self.refreshAfterClaim = refreshAfterClaim
     }
 
@@ -57,6 +60,7 @@ final class CodexResetClaimService {
     convenience init(
         authStore: CodexAuthStore,
         usageClient: CodexUsageClient,
+        expectedIdentityKey: String?,
         refreshAfterClaim: @escaping () async -> Void
     ) {
         self.init(
@@ -70,9 +74,10 @@ final class CodexResetClaimService {
                     guard candidate.hasUsableAccessToken, let token = candidate.auth.tokens?.accessToken else {
                         return nil
                     }
-                    return (token, candidate.auth.tokens?.accountID)
+                    return (token, candidate.accountIdentityKey)
                 }
             },
+            expectedIdentityKey: expectedIdentityKey,
             refreshAfterClaim: refreshAfterClaim
         )
     }
@@ -80,7 +85,10 @@ final class CodexResetClaimService {
     /// Claims the credit expiring at `expiry`. Never throws — every failure mode is logged loudly and
     /// collapsed to an outcome the popover can render.
     func claim(creditExpiringAt expiry: Date, redeemRequestID: String) async -> ResetClaimOutcome {
-        let candidates = await credentialCandidates()
+        let candidates = await credentialCandidates().filter { candidate in
+            guard let expectedIdentityKey else { return true }
+            return candidate.accountID?.caseInsensitiveCompare(expectedIdentityKey) == .orderedSame
+        }
         guard !candidates.isEmpty else {
             AppLog.error(LogTag.plugin("codex"), "reset claim: no usable Codex credentials")
             return .failed
@@ -91,18 +99,18 @@ final class CodexResetClaimService {
         // the list, and only the replay lets the server's `already_redeemed` prove the claim landed.
         let creditID: String
         var preferredCandidates = candidates
-        if let replayID = matchedCreditIDs[redeemRequestID] {
-            creditID = replayID
+        if let matched = matchedCredits[redeemRequestID] {
+            creditID = matched.id
+            preferredCandidates = candidates.filter { Self.belongsToSameAccount($0, as: matched.credentials) }
         } else {
             switch await matchCredit(expiringAt: expiry, candidates: candidates) {
             case .matched(let id, let authenticated):
                 creditID = id
-                matchedCreditIDs[redeemRequestID] = id
-                // Lead with the credential that just authenticated the list fetch. Deduplicate by the
-                // full (token, account) pair — ChatGPT-Account-Id changes what a token is authorized
-                // for, so a same-token candidate with a different account is a distinct fallback.
+                matchedCredits[redeemRequestID] = (id, authenticated)
+                // A rejected write can retry another token for this account, never another account.
                 preferredCandidates = [authenticated] + candidates.filter {
-                    $0.accessToken != authenticated.accessToken || $0.accountID != authenticated.accountID
+                    Self.belongsToSameAccount($0, as: authenticated)
+                        && $0.accessToken != authenticated.accessToken
                 }
             case .noCredit:
                 // Not an error: the credit was claimed elsewhere (CLI/web) or expired since the popover
@@ -115,6 +123,11 @@ final class CodexResetClaimService {
             }
         }
 
+        guard !preferredCandidates.isEmpty else {
+            AppLog.error(LogTag.plugin("codex"), "reset claim: the original account is no longer signed in")
+            return .failed
+        }
+
         let outcome = await consume(
             creditID: creditID, redeemRequestID: redeemRequestID, candidates: preferredCandidates
         )
@@ -124,6 +137,14 @@ final class CodexResetClaimService {
             await refreshAfterClaim()
         }
         return outcome
+    }
+
+    private static func belongsToSameAccount(_ candidate: Credentials, as original: Credentials) -> Bool {
+        guard let candidateAccount = candidate.accountID, let originalAccount = original.accountID else {
+            return candidate.accountID == nil && original.accountID == nil
+                && candidate.accessToken == original.accessToken
+        }
+        return candidateAccount.caseInsensitiveCompare(originalAccount) == .orderedSame
     }
 
     /// POSTs the consume, falling back across credential candidates on an auth rejection (401/403).
