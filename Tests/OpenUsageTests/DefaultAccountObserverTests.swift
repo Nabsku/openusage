@@ -71,6 +71,25 @@ final class DefaultAccountObserverTests: XCTestCase {
         )
     }
 
+    func testTrailingSlashOverrideUsesTheSameIdentityPathDuringObservationAndRefresh() {
+        let environment = FakeEnvironment(["CLAUDE_CONFIG_DIR": "~/.claude/"])
+        let files = FakeFiles(["/Users/dev/.claude//.claude.json": claudeStateJSON()])
+        let observer = DefaultAccountObserver(
+            environment: environment, files: files, keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let auth = ClaudeAuthStore(
+            environment: environment, files: files, keychain: FakeKeychain(),
+            expectedIdentityKey: "acct-uuid-1", homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+
+        XCTAssertEqual(
+            observer.observeClaude(),
+            .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude/")
+        )
+        XCTAssertTrue(auth.belongsToExpectedAccount())
+    }
+
     func testClaudeCommaListConfigDirIsUnresolved() {
         // `ClaudeAuthStore` treats the env value as ONE credential path; a scanner-style comma list
         // cannot be assigned a single account identity.

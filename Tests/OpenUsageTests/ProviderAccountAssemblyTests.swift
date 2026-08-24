@@ -242,6 +242,61 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(reloadedStore.resolvedDisplayName(cardID: cardID), "Work Max")
     }
 
+    func testPreviouslyVerifiedConfigDirectoryRemainsTheCredentialPrimary() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(), files: FakeFiles(), keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let previous = "/Users/dev/.claude-z-work"
+        let earlier = "/Users/dev/.claude-a-work"
+        let files = [
+            previous + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work"}}"#,
+            previous + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"current"}}"#,
+            earlier + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work"}}"#,
+            earlier + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"older"}}"#,
+        ]
+        _ = ProviderAccountAssembly.make(
+            observer: observer, accountsStore: store,
+            claudeDiscovery: makeDiscovery(files: files, subdirectories: [previous])
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer, accountsStore: store,
+            claudeDiscovery: makeDiscovery(files: files, subdirectories: [earlier, previous])
+        )
+
+        let card = try XCTUnwrap(assembly.claudeCards.first)
+        XCTAssertEqual(card.configDirPath, previous)
+        XCTAssertEqual(card.extraLogRoots.map(\.path), [earlier])
+        XCTAssertEqual(store.record(for: card.id)?.sources.first?.anchor, previous)
+    }
+
+    func testIncompleteDiscoveryDisablesUnverifiedDesktopFallback() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(),
+            files: FakeFiles(["/Users/dev/.claude.json": #"{"oauthAccount":{"accountUuid":"main"}}"#]),
+            keychain: FakeKeychain(), homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let discovery = ClaudeConfigDirDiscovery(
+            environment: FakeEnvironment(), files: FakeFiles(), keychain: ServiceKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSubdirectories: { _ in [URL(fileURLWithPath: "/Users/dev/.claude-work")] },
+            timeBudget: -1
+        )
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer, accountsStore: store, claudeDiscovery: discovery
+        )
+        let provider = try XCTUnwrap(ProviderCatalog.make(
+            claudeCards: assembly.claudeCards, claudeIdentityKeys: assembly.identityKeysByCard,
+            isClaudeDiscoveryComplete: assembly.isClaudeDiscoveryComplete
+        ).first as? ClaudeProvider)
+
+        XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        XCTAssertFalse(provider.authStore.allowsDesktopFallback)
+    }
+
     func testAccountSwapKeepsTheOriginalCardBoundToItsOwnConfigDirectory() throws {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         let original = DefaultAccountObserver(

@@ -107,4 +107,18 @@ final class ClaudeConfigDirDiscoveryTests: XCTestCase {
         )
         XCTAssertEqual(withoutOverride.run().findings.map(\.identityKey), ["acct-main"])
     }
+
+    func testExhaustedBudgetExplicitlyMarksDiscoveryAsIncomplete() {
+        let discovery = ClaudeConfigDirDiscovery(
+            environment: FakeEnvironment(), files: FakeFiles(), keychain: ServiceKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSubdirectories: { _ in [URL(fileURLWithPath: "/Users/dev/.claude-work")] },
+            timeBudget: -1
+        )
+
+        let result = discovery.run()
+
+        XCTAssertTrue(result.truncated)
+        XCTAssertTrue(result.findings.isEmpty)
+    }
 }

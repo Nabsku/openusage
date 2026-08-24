@@ -69,6 +69,19 @@ struct DefaultAccountObserver: Sendable {
         return email.map { "\($0) (\(org))" } ?? org
     }
 
+    /// Both launch discovery and bound refreshes must resolve the exact same state-file path.
+    static func claudeLocation(configDir: String, homeDirectory: URL) -> (anchor: String, identityPath: String) {
+        func expand(_ value: String) -> String {
+            guard value == "~" || value.hasPrefix("~/") else { return value }
+            return homeDirectory.path + String(value.dropFirst())
+        }
+        let anchor = expand(configDir)
+        let identityPath = anchor == expand("~/.claude")
+            ? expand("~/.claude.json")
+            : anchor + "/.claude.json"
+        return (anchor, identityPath)
+    }
+
     /// The default Claude home, mirroring `ClaudeAuthStore`'s resolution exactly (the observer must
     /// name the account whose credentials the provider actually refreshes with): `CLAUDE_CONFIG_DIR`
     /// when exported, else `~/.claude`. A comma-separated list can't be assigned one identity.
@@ -81,15 +94,11 @@ struct DefaultAccountObserver: Sendable {
             }
             configDir = raw
         }
-        let anchor = expandTilde(configDir)
-        // The identity file sits inside a custom config dir, but next to (not inside) the default
-        // `~/.claude` — Claude Code keeps the default's state at `~/.claude.json`.
-        let identityPath = anchor == expandTilde("~/.claude")
-            ? expandTilde("~/.claude.json")
-            : anchor + "/.claude.json"
+        let location = Self.claudeLocation(configDir: configDir, homeDirectory: homeDirectory())
+        let anchor = location.anchor
         let text: String?
         do {
-            text = try files.readTextIfPresent(identityPath)
+            text = try files.readTextIfPresent(location.identityPath)
         } catch {
             return .unresolved(reason: "identity file unreadable: \(error.localizedDescription)")
         }

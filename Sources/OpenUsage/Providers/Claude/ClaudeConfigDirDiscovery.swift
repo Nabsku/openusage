@@ -29,6 +29,7 @@ struct ClaudeConfigDirDiscovery {
         /// the log so a "my account didn't show up" report is diagnosable from a default log.
         /// Token-free and email-free by construction — identity hashes, kinds, and paths only.
         var notes: [String] = []
+        var truncated = false
     }
 
     var environment: EnvironmentReading
@@ -46,7 +47,7 @@ struct ClaudeConfigDirDiscovery {
         keychain: KeychainAccessing = SecurityKeychainAccessor(),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         listSubdirectories: @escaping @Sendable (URL) -> [URL] = Self.filesystemSubdirectories,
-        timeBudget: TimeInterval = 0.4,
+        timeBudget: TimeInterval = 3,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.environment = environment
@@ -58,14 +59,23 @@ struct ClaudeConfigDirDiscovery {
         self.now = now
     }
 
-    func run() -> Result {
+    func run(prioritizing preferredAnchors: Set<String> = []) -> Result {
         let started = now()
         var result = Result()
         let excluded = Set(defaultClaudeConfigDirs().map(canonical))
+        let preferred = Set(preferredAnchors.map(canonical))
+        let candidates = candidateDirectories().sorted { first, second in
+            let firstIsPreferred = preferred.contains(canonical(first.path))
+            let secondIsPreferred = preferred.contains(canonical(second.path))
+            return firstIsPreferred == secondIsPreferred
+                ? first.path < second.path
+                : firstIsPreferred
+        }
 
-        for candidate in candidateDirectories() {
-            if now().timeIntervalSince(started) > timeBudget {
-                result.notes.append("claude config-dir scan hit its \(Int(timeBudget * 1000))ms budget; finishing with partial results")
+        for candidate in candidates {
+            if Task.isCancelled || now().timeIntervalSince(started) > timeBudget {
+                result.notes.append("claude config-dir scan ended early; account ownership remains incomplete")
+                result.truncated = true
                 break
             }
             guard !excluded.contains(canonical(candidate.path)) else { continue }

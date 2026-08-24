@@ -14,6 +14,7 @@ struct ClaudeAuthStore: Sendable {
     var files: TextFileAccessing
     var keychain: KeychainAccessing
     var desktop: ClaudeDesktopAuthStore
+    var homeDirectory: @Sendable () -> URL
     var now: @Sendable () -> Date
     let scope: ClaudeCredentialScope
     let expectedIdentityKey: String?
@@ -31,12 +32,14 @@ struct ClaudeAuthStore: Sendable {
         scope: ClaudeCredentialScope = .standard,
         allowsDesktopFallback: Bool = true,
         expectedIdentityKey: String? = nil,
+        homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.environment = environment
         self.files = files
         self.keychain = keychain
         self.desktop = desktop ?? ClaudeDesktopAuthStore(files: files, now: now)
+        self.homeDirectory = homeDirectory
         self.scope = scope
         self.allowsDesktopFallback = allowsDesktopFallback
         self.expectedIdentityKey = expectedIdentityKey
@@ -113,11 +116,9 @@ struct ClaudeAuthStore: Sendable {
         case .standard:
             let home = claudeHomeOverride() ?? Self.defaultClaudeHome
             guard !home.contains(",") else { return false }
-            let expandedHome = (home as NSString).expandingTildeInPath
-            let expandedDefault = (Self.defaultClaudeHome as NSString).expandingTildeInPath
-            identityPath = URL(fileURLWithPath: expandedHome).standardizedFileURL.path
-                == URL(fileURLWithPath: expandedDefault).standardizedFileURL.path
-                ? "\(home).json" : "\(home)/.claude.json"
+            identityPath = DefaultAccountObserver.claudeLocation(
+                configDir: home, homeDirectory: homeDirectory()
+            ).identityPath
         }
         guard let text = try? files.readTextIfPresent(identityPath),
               let state = try? JSONDecoder().decode(

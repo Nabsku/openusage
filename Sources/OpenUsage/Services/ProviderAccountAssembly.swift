@@ -39,6 +39,8 @@ struct ProviderAccountAssembly {
     var defaultClaudeDisplayName: String?
     /// The default runtime follows its account record, even when another account keeps `claude`.
     var defaultClaudeCardID = "claude"
+    /// An incomplete scan cannot prove that an unpinned Desktop login belongs to the default card.
+    var isClaudeDiscoveryComplete = true
 
     /// `waitsForLoginShell`: true for the menu-bar app (a Finder/Dock launch inherits no shell
     /// exports, so the pass leans on the login-shell layers), false for the one-shot CLI (a terminal
@@ -137,13 +139,18 @@ struct ProviderAccountAssembly {
         // and a custom-dir-only login should still get its card.
         var foundClaudeAccounts: [(identityKey: String, label: String?, dirs: [ClaudeConfigDirDiscovery.Finding])] = []
         var defaultClaudeExtraLogRoots: [URL] = []
+        var isClaudeDiscoveryComplete = true
+        let preferredConfigAnchors = Dictionary(uniqueKeysWithValues: accountsStore.records.compactMap { record in
+            record.sources.first { $0.kind == .configDir }?.anchor.map { (record.identityKey, $0) }
+        })
         let claudeOutcome = outcomes.first { $0.family == "claude" }?.outcome
         if let claudeDiscovery, let claudeOutcome {
             if case .unresolved = claudeOutcome {
                 AppLog.info(.config, "discovery: claude default login present but its identity is unreadable → skipping extra-account candidates this launch")
             } else {
                 let defaultKey = identityKeys["claude"]
-                let scan = claudeDiscovery.run()
+                let scan = claudeDiscovery.run(prioritizing: Set(preferredConfigAnchors.values))
+                isClaudeDiscoveryComplete = !scan.truncated
                 for note in scan.notes {
                     AppLog.info(.config, "discovery: \(note)")
                 }
@@ -154,7 +161,13 @@ struct ProviderAccountAssembly {
                     grouped[finding.identityKey, default: []].append(finding)
                 }
                 for identityKey in order {
-                    let findings = grouped[identityKey] ?? []
+                    var findings = grouped[identityKey] ?? []
+                    if let preferred = preferredConfigAnchors[identityKey],
+                       let index = findings.firstIndex(where: { $0.anchorPath == preferred }),
+                       index != 0
+                    {
+                        findings.insert(findings.remove(at: index), at: 0)
+                    }
                     let sources = findings.map {
                         ProviderAccountSource(
                             kind: .configDir,
@@ -222,7 +235,8 @@ struct ProviderAccountAssembly {
             claudeCards: claudeCards,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
             defaultClaudeDisplayName: defaultClaudeName,
-            defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude"
+            defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude",
+            isClaudeDiscoveryComplete: isClaudeDiscoveryComplete
         )
     }
 }
