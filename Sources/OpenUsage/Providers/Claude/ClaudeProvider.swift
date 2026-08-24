@@ -3,9 +3,6 @@ import Foundation
 
 @MainActor
 final class ClaudeProvider: ProviderRuntime {
-    /// The default card's identity. Extra account cards inject their own `Provider` with an
-    /// `@`-suffixed id and an account-derived display name; everything else about the runtime is
-    /// identical.
     static func makeProvider(id: String = "claude", displayName: String = "Claude") -> Provider {
         Provider(
             id: id,
@@ -19,7 +16,6 @@ final class ClaudeProvider: ProviderRuntime {
     }
 
     let provider: Provider
-
     let authStore: ClaudeAuthStore
     let usageClient: ClaudeUsageClient
     let logUsageScanner: ClaudeLogUsageScanner
@@ -29,8 +25,7 @@ final class ClaudeProvider: ProviderRuntime {
     /// Last successful live-usage result and a rate-limit cooldown, carried across refreshes (the provider
     /// is a long-lived singleton). `/api/oauth/usage` rate-limits aggressively, so on a 429 we serve the
     /// last-good bars with a staleness note instead of blanking the dashboard, and skip the live call
-    /// entirely until the cooldown expires so we don't keep hammering an endpoint that's already limiting
-    /// us. Mirrors the legacy plugin's `cachedUsageData` + `rateLimitedUntilMs`.
+    /// entirely until the cooldown expires so the app doesn't keep hitting an already limited endpoint.
     private var cachedCredentialFingerprint: Data?
     private var lastGoodUsage: ClaudeMappedUsage?
     private var rateLimitedUntil: Date?
@@ -88,11 +83,18 @@ final class ClaudeProvider: ProviderRuntime {
     }
 
     func refresh() async -> ProviderSnapshot {
-        await refresh(
+        guard await loadOffMainActor({ [authStore] in authStore.belongsToExpectedAccount() }) else {
+            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.credentialsChanged)
+        }
+        let snapshot = await refresh(
             credentialReloadsRemaining: 1,
             forceDesktopFallback: false,
             previousFallbackError: nil
         )
+        guard await loadOffMainActor({ [authStore] in authStore.belongsToExpectedAccount() }) else {
+            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.credentialsChanged)
+        }
+        return snapshot
     }
 
     /// Claude Code can replace a login while a request is in flight. Reload once when that happens so

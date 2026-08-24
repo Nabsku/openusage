@@ -39,6 +39,27 @@ final class ProviderAccountsStoreTests: XCTestCase {
         XCTAssertTrue(records[0].sources.contains(where: \.holdsDefaultSource))
     }
 
+    func testNewAccountSourcesNeverRewriteTheDowngradeCompatibleRegistry() throws {
+        let defaults = makeScratchDefaults()
+        let existing = ProviderAccountRecord(
+            id: "claude", family: "claude", identityKey: "original", label: "Personal",
+            sources: [.init(kind: .defaultHome, anchor: "/Users/dev/.claude", holdsDefaultSource: true)]
+        )
+        let originalData = try JSONEncoder().encode([existing])
+        defaults.set(originalData, forKey: ProviderAccountsStore.legacyStorageKey)
+
+        let store = ProviderAccountsStore(defaults: defaults)
+        store.reconcile(with: [.init(
+            family: "claude", identityKey: "work", label: "Work", sources: [
+                .init(kind: .configDir, anchor: "/Users/dev/.claude-work", holdsDefaultSource: false),
+            ]
+        )])
+
+        XCTAssertEqual(defaults.data(forKey: ProviderAccountsStore.legacyStorageKey), originalData)
+        XCTAssertEqual(ProviderAccountsStore(defaults: defaults).records.count, 2)
+        XCTAssertNotNil(defaults.data(forKey: ProviderAccountsStore.storageKey))
+    }
+
     func testSwappedDefaultMintsAHashIDAndTakesTheBadge() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         store.reconcile(with: [defaultHomeObservation(family: "claude", identityKey: "acct-a")])

@@ -8,6 +8,7 @@ struct ClaudeAccountCard: Equatable, Sendable {
     /// CLI/API matching.
     var id: String
     var displayName: String
+    var identityKey: String
     /// The config dir the card's credentials and spend logs are pinned to.
     var configDirPath: String
     /// The literal string whose hash names the dir's keychain item (see `ClaudeCredentialScope`).
@@ -209,6 +210,7 @@ struct ProviderAccountAssembly {
                 displayName: ClaudeAccountCard.displayName(
                     customLabel: record.customLabel, label: record.label, id: record.id
                 ),
+                identityKey: record.identityKey,
                 configDirPath: primary.anchorPath,
                 keychainLiteral: primary.keychainLiteral,
                 extraLogRoots: account.dirs.dropFirst().map { URL(fileURLWithPath: $0.anchorPath) }

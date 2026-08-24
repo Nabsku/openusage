@@ -14,7 +14,8 @@ enum ProviderCatalog {
         claudeCards: [ClaudeAccountCard] = [],
         defaultClaudeExtraLogRoots: [URL] = [],
         defaultClaudeDisplayName: String? = nil,
-        defaultClaudeCardID: String = "claude"
+        defaultClaudeCardID: String = "claude",
+        claudeIdentityKeys: [String: String] = [:]
     ) -> [ProviderRuntime] {
         // Default provider order (see AGENTS.md "## Providers"): the three established providers first,
         // then every other provider alphabetically by display name. Account cards slot in right after
@@ -28,7 +29,10 @@ enum ProviderCatalog {
             // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
             // belongs to one of them — fetching that account's usage onto the default card. Desktop
             // returns as its own properly-pinned source kind in Phase 3.
-            authStore: ClaudeAuthStore(allowsDesktopFallback: claudeCards.isEmpty),
+            authStore: ClaudeAuthStore(
+                allowsDesktopFallback: claudeCards.isEmpty,
+                expectedIdentityKey: claudeIdentityKeys[defaultClaudeCardID]
+            ),
             logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots)
         ))
         for card in claudeCards {
@@ -56,7 +60,8 @@ enum ProviderCatalog {
         ClaudeProvider(
             provider: ClaudeProvider.makeProvider(id: card.id, displayName: card.displayName),
             authStore: ClaudeAuthStore(
-                scope: .configDir(path: card.configDirPath, keychainLiteral: card.keychainLiteral)
+                scope: .configDir(path: card.configDirPath, keychainLiteral: card.keychainLiteral),
+                expectedIdentityKey: card.identityKey
             ),
             logUsageScanner: ClaudeLogUsageScanner(
                 cacheIdentityOverride: "claude-account:\(card.id)",

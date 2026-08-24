@@ -69,6 +69,9 @@ final class TelemetryRecorder {
         guard store.enabled else { return }
         guard outcome == .refreshed || outcome == .failed else { return }
 
+        // Account-card identifiers contain a stable account-derived hash. Analytics only describe
+        // provider families, so normalize before either persistence or transmission.
+        let providerID = ProviderAccountID.family(of: providerID)
         let today = Self.dayString(now())
         var counters = store.providerCounters()
         // Roll a stale prior-day counter over to its own event before accumulating today's.
@@ -115,10 +118,10 @@ final class TelemetryRecorder {
             "install_id": store.installID,
             "app_version": AppInfo.version,
             "os_version": ProcessInfo.processInfo.operatingSystemVersionString,
-            "enabled_providers": config.enabledProviders,
-            "enabled_metric_ids": config.enabledMetricIDs,
-            "pinned_metric_ids": config.pinnedMetricIDs,
-            "expanded_metric_ids": config.expandedMetricIDs,
+            "enabled_providers": Self.unique(config.enabledProviders.map(ProviderAccountID.family(of:))),
+            "enabled_metric_ids": Self.familyMetricIDs(config.enabledMetricIDs),
+            "pinned_metric_ids": Self.familyMetricIDs(config.pinnedMetricIDs),
+            "expanded_metric_ids": Self.familyMetricIDs(config.expandedMetricIDs),
             "menu_bar_style": config.menuBarStyle
         ])
         sink.flush()
@@ -131,7 +134,7 @@ final class TelemetryRecorder {
 
     private static func providerRollupProperties(providerID: String, counter: ProviderDailyCounter) -> [String: Any] {
         var properties: [String: Any] = [
-            "provider_id": providerID,
+            "provider_id": ProviderAccountID.family(of: providerID),
             "success_count": counter.success,
             "failure_count": counter.failure,
             "error_categories": counter.errors,
@@ -148,6 +151,21 @@ final class TelemetryRecorder {
         properties["expected_failure_count"] = expectedFailureCount
         properties["unexpected_failure_count"] = max(0, counter.failure - expectedFailureCount)
         return properties
+    }
+
+    private static func familyMetricIDs(_ metricIDs: [String]) -> [String] {
+        unique(metricIDs.map { metricID in
+            guard let separator = metricID.firstIndex(of: ".") else {
+                return ProviderAccountID.family(of: metricID)
+            }
+            let providerID = String(metricID[..<separator])
+            return ProviderAccountID.family(of: providerID) + metricID[separator...]
+        })
+    }
+
+    private static func unique(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        return values.filter { seen.insert($0).inserted }
     }
 
     /// Local-calendar `yyyy-MM-dd`. Local (not UTC) so "every day" matches the user's perception; the

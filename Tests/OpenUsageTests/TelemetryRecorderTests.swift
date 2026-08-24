@@ -99,6 +99,53 @@ final class TelemetryRecorderTests: XCTestCase {
         }
     }
 
+    func testDailyActiveNeverIncludesAccountDerivedIdentifiers() {
+        let sink = FakeSink()
+        let store = makeStore("account-safe-daily-active")
+        let accountSnapshot = TelemetryConfigSnapshot(
+            enabledProviders: ["claude", "claude@ab12cd34", "codex@deadbeef"],
+            enabledMetricIDs: ["claude.session", "claude@ab12cd34.session", "codex@deadbeef.weekly"],
+            pinnedMetricIDs: ["claude@ab12cd34.session"],
+            expandedMetricIDs: ["codex@deadbeef.weekly", "codex.weekly"],
+            menuBarStyle: "text"
+        )
+        let recorder = TelemetryRecorder(
+            sink: sink,
+            store: store,
+            snapshot: { accountSnapshot },
+            now: { self.day(25) }
+        )
+
+        recorder.tick()
+
+        let event = try! XCTUnwrap(sink.events(named: "app_daily_active").first)
+        XCTAssertEqual(event["enabled_providers"] as? [String], ["claude", "codex"])
+        XCTAssertEqual(event["enabled_metric_ids"] as? [String], ["claude.session", "codex.weekly"])
+        XCTAssertEqual(event["pinned_metric_ids"] as? [String], ["claude.session"])
+        XCTAssertEqual(event["expanded_metric_ids"] as? [String], ["codex.weekly"])
+    }
+
+    func testAccountRefreshesShareOneFamilyRollupWithoutPersistingAccountIDs() {
+        let sink = FakeSink()
+        let store = makeStore("account-safe-provider-rollup")
+        var clock = day(25)
+        let recorder = TelemetryRecorder(sink: sink, store: store, snapshot: { self.snapshot }, now: { clock })
+
+        recorder.record(providerID: "claude", outcome: .refreshed, category: nil, manual: false)
+        recorder.record(providerID: "claude@ab12cd34", outcome: .failed, category: .network, manual: true)
+
+        XCTAssertEqual(Set(store.providerCounters().keys), ["claude"])
+
+        clock = day(26)
+        recorder.tick()
+
+        let event = try! XCTUnwrap(sink.events(named: "provider_refresh_daily").first)
+        XCTAssertEqual(event["provider_id"] as? String, "claude")
+        XCTAssertEqual(event["success_count"] as? Int, 1)
+        XCTAssertEqual(event["failure_count"] as? Int, 1)
+        XCTAssertEqual(event["manual_refresh_count"] as? Int, 1)
+    }
+
     func testTickFlushesStalePriorDayCounterEvenWithoutNewOutcomes() {
         let sink = FakeSink()
         let store = makeStore("sweep")

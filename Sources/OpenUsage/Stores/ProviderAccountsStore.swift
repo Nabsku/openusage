@@ -79,22 +79,25 @@ struct ProviderAccountRecord: Codable, Equatable, Sendable {
     }
 }
 
-/// The account-first registry (`openusage.providerAccounts.v1`). Reconciled at every launch from the
+/// The account-first registry (`openusage.providerAccounts.v2`). Reconciled at every launch from the
 /// default-home identity reads; authoritative from day one — there is no parallel card model to drift
 /// from. With a single account per family (all Phase 1 can observe), the registry is bookkeeping the
 /// UI doesn't consult yet; multi-account rendering (Phase 2+) reads cards straight from these records.
 @MainActor
 final class ProviderAccountsStore {
-    static let storageKey = "openusage.providerAccounts.v1"
+    static let storageKey = "openusage.providerAccounts.v2"
+    static let legacyStorageKey = "openusage.providerAccounts.v1"
 
     private let defaults: UserDefaults
     private(set) var records: [ProviderAccountRecord]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        if let data = defaults.data(forKey: Self.storageKey) {
+        let currentData = defaults.data(forKey: Self.storageKey)
+        if let data = currentData ?? defaults.data(forKey: Self.legacyStorageKey) {
             do {
                 self.records = try JSONDecoder().decode([ProviderAccountRecord].self, from: data)
+                if currentData == nil { persist() }
             } catch {
                 AppLog.error(.config, "provider-account records were undecodable; starting a fresh registry: \(error.localizedDescription)")
                 self.records = []

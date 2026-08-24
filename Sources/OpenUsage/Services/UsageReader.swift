@@ -62,7 +62,8 @@ public struct UsageReader {
             claudeCards: accountAssembly.claudeCards,
             defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
             defaultClaudeDisplayName: accountAssembly.defaultClaudeDisplayName,
-            defaultClaudeCardID: accountAssembly.defaultClaudeCardID
+            defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
+            claudeIdentityKeys: accountAssembly.identityKeysByCard
         )
         let registry = WidgetRegistry.from(providers)
         let knownIDs = Set(registry.providers.map(\.id))

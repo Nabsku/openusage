@@ -134,6 +134,28 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         XCTAssertEqual(usageRequests(fixture.http).count, 2)
     }
 
+    func testBoundAccountRejectsAnotherLoginBeforeAndAfterAUsageRequest() async {
+        let identityPath = "/tmp/claude/.claude.json"
+        let files = FakeFiles([
+            path: credentials(access: "account-a", refresh: "refresh-a", plan: "pro"),
+            identityPath: #"{"oauthAccount":{"accountUuid":"account-a"}}"#,
+        ])
+        let fixture = makeFixture(files: files, expectedIdentityKey: "account-a") { request in
+            if request.headers["Authorization"] == "Bearer account-a" {
+                files.files[identityPath] = #"{"oauthAccount":{"accountUuid":"account-b"}}"#
+            }
+            return Self.usageResponse(percent: 75)
+        }
+
+        let swappedDuringRefresh = await fixture.provider.refresh()
+        XCTAssertNil(sessionUsage(swappedDuringRefresh))
+        XCTAssertNotNil(swappedDuringRefresh.errorCategory)
+
+        let swappedBeforeRefresh = await fixture.provider.refresh()
+        XCTAssertNil(sessionUsage(swappedBeforeRefresh))
+        XCTAssertEqual(usageRequests(fixture.http).count, 1)
+    }
+
     func testHigherPriorityLoginAddedDuringUsageRequestWins() async {
         let accountA = credentials(access: "account-a", refresh: "refresh-a", plan: "pro")
         let accountB = credentials(access: "account-b", refresh: "refresh-b", plan: "max")
@@ -248,6 +270,7 @@ final class ClaudeAccountIsolationTests: XCTestCase {
     private func makeFixture(
         files: FakeFiles,
         keychain: any KeychainAccessing = FakeKeychain(),
+        expectedIdentityKey: String? = nil,
         handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse
     ) -> Fixture {
         let http = RoutingHTTPClient(handler: handler)
@@ -258,6 +281,7 @@ final class ClaudeAccountIsolationTests: XCTestCase {
                     environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
                     files: files,
                     keychain: keychain,
+                    expectedIdentityKey: expectedIdentityKey,
                     now: { now }
                 ),
                 usageClient: ClaudeUsageClient(httpClient: http),
