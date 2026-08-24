@@ -114,11 +114,8 @@ struct TotalSpendCard: View {
         .accessibilityValue(metric.title)
     }
 
-    /// Names the providers actually feeding the ring — the enabled spend-capable set — instead of a
-    /// hardcoded list, so disabling a provider (or a new spend provider shipping) can't make the
-    /// tooltip lie about what the total reflects.
     private var infoTooltip: String {
-        let names = providers.map { container.displayName(for: $0) }
+        let names = projection.slices.map(\.title)
         return "Only includes \(names.formatted(.list(type: .and)))."
     }
 

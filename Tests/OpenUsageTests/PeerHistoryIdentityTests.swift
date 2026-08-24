@@ -42,7 +42,9 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let localMap = ["claude": maxKey, "claude@f15456b0": teamKey]
 
-        let remapped = PeerHistoryRemapper.remap(documents: [miniDoc], localIdentityByCardID: localMap)
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [miniDoc], localIdentityByCardID: localMap, localAccountCardIDs: Set(localMap.keys)
+        )
 
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
         let byCard = Dictionary(grouping: remapped.histories, by: { $0.cardID })
@@ -58,7 +60,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let remapped = PeerHistoryRemapper.remap(
             documents: [doc],
-            localIdentityByCardID: ["claude": maxKey]
+            localIdentityByCardID: ["claude": maxKey], localAccountCardIDs: ["claude"]
         )
         XCTAssertTrue(remapped.histories.isEmpty)
         XCTAssertEqual(remapped.remoteOnly.count, 1)
@@ -81,7 +83,8 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
 
         let remapped = PeerHistoryRemapper.remap(
-            documents: [previous, current], localIdentityByCardID: ["claude": maxKey]
+            documents: [previous, current], localIdentityByCardID: ["claude": maxKey],
+            localAccountCardIDs: ["claude"]
         )
 
         XCTAssertEqual(remapped.histories.count, 1)
@@ -97,7 +100,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let remapped = PeerHistoryRemapper.remap(
             documents: [v1],
-            localIdentityByCardID: ["claude": maxKey]
+            localIdentityByCardID: ["claude": maxKey], localAccountCardIDs: ["claude"]
         )
         XCTAssertTrue(remapped.histories.isEmpty)
         XCTAssertEqual(remapped.quarantined.first?.reason, .missingPeerIdentity)
@@ -125,7 +128,8 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let local = PeerHistoryRemapper.remap(
             documents: [document],
-            localIdentityByCardID: ["claude": maxKey, "claude@12345678": maxKey]
+            localIdentityByCardID: ["claude": maxKey, "claude@12345678": maxKey],
+            localAccountCardIDs: ["claude", "claude@12345678"]
         )
         XCTAssertEqual(local.quarantined.first?.reason, .ambiguousLocalIdentity)
 
@@ -137,9 +141,25 @@ final class PeerHistoryIdentityTests: XCTestCase {
             identities: ["claude": maxKey, "claude@12345678": maxKey]
         )
         let peer = PeerHistoryRemapper.remap(
-            documents: [duplicate], localIdentityByCardID: ["claude": maxKey]
+            documents: [duplicate], localIdentityByCardID: ["claude": maxKey],
+            localAccountCardIDs: ["claude"]
         )
         XCTAssertEqual(peer.quarantined.map(\.reason), [.ambiguousPeerIdentity, .ambiguousPeerIdentity])
+    }
+
+    func testMixedCaseIdentitiesResolveToTheSameAccountAcrossMacs() {
+        let document = makeDocument(
+            providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
+            identities: ["claude": maxKey.uppercased()]
+        )
+
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [document], localIdentityByCardID: ["claude": maxKey],
+            localAccountCardIDs: ["claude"]
+        )
+
+        XCTAssertEqual(remapped.histories.map(\.cardID), ["claude"])
+        XCTAssertTrue(remapped.remoteOnly.isEmpty)
     }
 
     func testLocalDocumentPublishesAccountCardsWithIdentities() {
@@ -199,6 +219,27 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         XCTAssertEqual(total.slices.count, 1)
         XCTAssertEqual(total.slices[0].amountUSD, 42, accuracy: 0.001)
+    }
+
+    func testRemoteOnlyAccountAppearsWhenThisMacHasNoLocalLogin() {
+        let provider = ClaudeProvider.makeProvider()
+        let descriptor = WidgetDescriptor.usageTrend(provider: provider)
+            .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test")
+        let dataStore = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [descriptor]),
+            providers: [], cache: scratchCache(), defaults: makeScratchDefaults("NoLocalAccount"),
+            providerIdentityKeys: [:]
+        )
+        let document = makeDocument(
+            deviceName: "Mac mini",
+            providers: ["claude": history(day: dayKey(Date()), tokens: 100, cost: 4)],
+            identities: ["claude": "remote-account"]
+        )
+
+        dataStore.setPeerHistoryDocuments([document], ownDeviceID: "this-mac")
+
+        XCTAssertEqual(dataStore.remoteOnlySpend.count, 1)
+        XCTAssertEqual(dataStore.remoteOnlySpend.first?.provider.displayName, "Claude · Mac mini")
     }
 
     func testClearingPeersDropsRemoteOnlyEntries() {

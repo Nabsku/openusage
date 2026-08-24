@@ -54,7 +54,7 @@ final class UsageHistoryDocumentTests: XCTestCase {
         XCTAssertThrowsError(try document.validate())
 
         document.providers["claude@ab12cd34"] = document.providers["claude"]
-        document.identities = ["claude": "shared-account", "claude@ab12cd34": "shared-account"]
+        document.identities = ["claude": "shared-account", "claude@ab12cd34": "SHARED-ACCOUNT"]
         XCTAssertThrowsError(try document.validate()) { error in
             guard case .duplicateIdentity = error as? UsageHistoryDocumentError else {
                 return XCTFail("expected duplicate account identity, got \(error)")

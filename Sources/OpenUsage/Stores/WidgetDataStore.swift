@@ -438,7 +438,7 @@ final class WidgetDataStore {
                         AppLog.warn(.config, "sync: omitting unresolved account history for \(providerID)")
                         continue
                     }
-                    identities[providerID] = identity
+                    identities[providerID] = identity.lowercased()
                 }
                 providers[providerID] = history
             }
@@ -467,10 +467,15 @@ final class WidgetDataStore {
         // Match peers by account identity, not card id — the same account can be the default card
         // on one Mac and an extra account card on another. Whatever matches no local card at all
         // becomes a Total Spend-only remote entry below.
+        var localAccountCardIDs = Set(providerIdentityKeys.keys)
+        localAccountCardIDs.formUnion(registry.providers.lazy.map(\.id).filter(ProviderAccountID.isAccountCard))
+        localAccountCardIDs.formUnion(localSnapshots.compactMap { cardID, snapshot in
+            snapshot.usageHistory == nil ? nil : cardID
+        })
         let remapped = PeerHistoryRemapper.remap(
             documents: peerHistoryDocuments,
             localIdentityByCardID: providerIdentityKeys,
-            localAccountCardIDs: Set(registry.providers.map(\.id))
+            localAccountCardIDs: localAccountCardIDs
         )
         if !remapped.quarantined.isEmpty {
             AppLog.warn(.config, "sync: quarantined \(remapped.quarantined.count) unverified peer account histories")

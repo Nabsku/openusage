@@ -57,7 +57,7 @@ struct UsageHistoryDocument: Hashable, Sendable, Codable, Identifiable {
                   identity.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
                   !identity.contains("/"), !identity.contains("\\")
             else { throw UsageHistoryDocumentError.invalidIdentity(providerID) }
-            guard identitiesByFamily[family, default: []].insert(identity).inserted else {
+            guard identitiesByFamily[family, default: []].insert(identity.lowercased()).inserted else {
                 throw UsageHistoryDocumentError.duplicateIdentity(providerID)
             }
         }

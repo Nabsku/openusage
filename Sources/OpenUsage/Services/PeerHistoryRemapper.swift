@@ -39,11 +39,16 @@ enum PeerHistoryRemapper {
     static func remap(
         documents: [UsageHistoryDocument],
         localIdentityByCardID: [String: String],
-        localAccountCardIDs: Set<String>? = nil
+        localAccountCardIDs: Set<String>
     ) -> Remapped {
         struct AccountKey: Hashable {
             let family: String
             let identity: String
+
+            init(family: String, identity: String) {
+                self.family = family
+                self.identity = identity.lowercased()
+            }
         }
 
         var localCards: [AccountKey: [String]] = [:]
@@ -52,8 +57,6 @@ enum PeerHistoryRemapper {
             guard ProviderAccountID.families.contains(family) else { continue }
             localCards[AccountKey(family: family, identity: identity), default: []].append(cardID)
         }
-        let knownCardIDs = localAccountCardIDs ?? Set(localIdentityByCardID.keys)
-
         var result = Remapped()
         var remoteAccounts: [AccountKey: RemoteOnlyHistory] = [:]
 
@@ -92,18 +95,16 @@ enum PeerHistoryRemapper {
                     continue
                 }
 
-                let familyCards = knownCardIDs.filter { ProviderAccountID.family(of: $0) == family }
-                guard familyCards.contains(where: { localIdentityByCardID[$0] != nil }),
-                      !familyCards.contains(where: { localIdentityByCardID[$0] == nil })
-                else {
+                let familyCards = localAccountCardIDs.filter { ProviderAccountID.family(of: $0) == family }
+                if familyCards.contains(where: { localIdentityByCardID[$0] == nil }) {
                     result.quarantined.append(.init(cardID: peerCardID, family: family, reason: .unresolvedLocalIdentity))
                     continue
                 }
 
                 var entry = remoteAccounts[key] ?? RemoteOnlyHistory(
-                    identityKey: identity,
+                    identityKey: key.identity,
                     family: family,
-                    cardID: ProviderAccountID.make(family: family, identityKey: identity),
+                    cardID: ProviderAccountID.make(family: family, identityKey: key.identity),
                     deviceNamesByID: [:],
                     histories: []
                 )
