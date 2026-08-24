@@ -77,14 +77,7 @@ final class AppContainer {
         let accountAssembly = ProviderAccountAssembly.make(accountsStore: accounts, waitsForLoginShell: true)
         self.accounts = accounts
 
-        let providers = ProviderCatalog.make(
-            claudeCards: accountAssembly.claudeCards,
-            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
-            defaultClaudeDisplayName: accountAssembly.defaultClaudeDisplayName,
-            defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
-            defaultClaudeCoworkRoots: accountAssembly.defaultClaudeCoworkRoots,
-            defaultClaudeOrganization: accountAssembly.defaultClaudeOrganization
-        )
+        let providers = ProviderCatalog.make(claude: accountAssembly.claudeRuntimePlan)
         let registry = WidgetRegistry.from(providers)
         let apiKeyProviders = providers.compactMap { $0 as? any APIKeyManaging }
         let enablement = ProviderEnablementStore()

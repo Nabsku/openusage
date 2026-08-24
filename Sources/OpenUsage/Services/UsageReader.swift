@@ -38,9 +38,8 @@ public struct UsageReader {
 
     public func read(providerID requestedProviderID: String? = nil, force: Bool = false) async throws -> UsageReadResult {
         // The launch account pass (see `ProviderAccountAssembly`): resolves each family's default
-        // account so cached snapshots are guarded — and refreshed ones stamped — with the correct
-        // account, and finds the extra Claude cards the catalog must build (the CLI must know the
-        // same card set as the app, or family matching would answer differently between the two).
+        // account and discovers every verified Claude runtime before the catalog is constructed.
+        // The CLI and menu-bar app therefore expose the same stable account graph and cache stamps.
         // Skipped when a test injects its own providers — they have no real homes to read.
         //
         // Warm the login-shell capture FIRST (off-main, one bounded subprocess). Identity-relevant
@@ -54,17 +53,17 @@ public struct UsageReader {
                 _ = LoginShellEnvironment.shared.ensureCaptured()
             }.value
         }
+        let accounts = providersOverride == nil ? ProviderAccountsStore(defaults: defaults) : nil
         let accountAssembly = providersOverride == nil
-            ? ProviderAccountAssembly.make(defaults: defaults, waitsForLoginShell: false)
+            ? ProviderAccountAssembly.make(
+                defaults: defaults,
+                accountsStore: accounts,
+                waitsForLoginShell: false
+            )
             : ProviderAccountAssembly(identityKeysByCard: [:])
         let providers = providersOverride ?? ProviderCatalog.make(
             defaults: defaults,
-            claudeCards: accountAssembly.claudeCards,
-            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
-            defaultClaudeDisplayName: accountAssembly.defaultClaudeDisplayName,
-            defaultClaudeCardID: accountAssembly.defaultClaudeCardID,
-            defaultClaudeCoworkRoots: accountAssembly.defaultClaudeCoworkRoots,
-            defaultClaudeOrganization: accountAssembly.defaultClaudeOrganization
+            claude: accountAssembly.claudeRuntimePlan
         )
         let registry = WidgetRegistry.from(providers)
         let knownIDs = Set(registry.providers.map(\.id))
@@ -135,10 +134,6 @@ public struct UsageReader {
                 .compactMap { id in errors[id].map { "\(id): \($0)" } }
         }
 
-        // CLI output is human-read: resolve card titles against the persisted account registry so
-        // renames show, matching the app's UI and HTTP API. Injected-provider tests use their own
-        // defaults suite, so this is a no-op there.
-        let accountTitles = ProviderAccountsStore(defaults: defaults).resolvedDisplayNamesByCardID
         let state = LocalUsageAPI.State(
             enabledOrderedIDs: enabledOrderedIDs,
             knownIDs: knownIDs,
@@ -146,7 +141,7 @@ public struct UsageReader {
             limitDescriptors: registry.limitDescriptorsByProvider,
             errors: errors
         )
-        .resolvingDisplayNames(accountTitles)
+        .resolvingDisplayNames(accounts?.resolvedDisplayNamesByCardID ?? [:])
         let path = requestedToken.map { "/v1/limits/\($0)" } ?? "/v1/limits"
         let response = LocalUsageAPI.respond(method: "GET", path: path, state: state)
         guard let data = response.body else {

@@ -4,50 +4,30 @@ import Foundation
 /// their runtimes here so credentials, refresh behavior, pricing, and normalization can never drift.
 @MainActor
 enum ProviderCatalog {
-    /// `claudeCards` carries the extra Claude account cards found by the launch account pass
-    /// (`ProviderAccountAssembly`). Each becomes an ordinary runtime inserted right after the default
-    /// Claude card, with credentials and usage logs pinned to exactly its own config dir. The empty
-    /// default keeps the historical single-card set for focused tests and callers that intentionally
-    /// skip the account pass.
     static func make(
         defaults: UserDefaults = .standard,
-        claudeCards: [ClaudeAccountCard] = [],
-        defaultClaudeExtraLogRoots: [URL] = [],
-        defaultClaudeDisplayName: String? = nil,
-        defaultClaudeCardID: String = "claude",
-        defaultClaudeCoworkRoots: [URL]? = nil,
-        defaultClaudeOrganization: String? = nil
+        claude: ClaudeRuntimePlan = ClaudeRuntimePlan()
     ) -> [ProviderRuntime] {
-        // Default provider order (see AGENTS.md "## Providers"): the three established providers first,
-        // then every other provider alphabetically by display name. Account cards slot in right after
-        // their family's default card.
-        //
-        // Every baked `Provider.displayName` here is the DERIVED default — renames live only in the
-        // account registry and are resolved at render time (`ProviderAccountRecord.resolvedDisplayName`),
-        // so a baked name can never be a stale copy of one.
         var runtimes: [ProviderRuntime] = []
-        runtimes.append(ClaudeProvider(
-            provider: ClaudeProvider.makeProvider(
-                id: defaultClaudeCardID,
-                displayName: defaultClaudeDisplayName ?? "Claude"
-            ),
-            // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
-            // belongs to one of them — fetching that account's usage onto the default card. With the
-            // default account's own org known, the fallback stays available pinned to that org;
-            // otherwise it is disabled rather than blind.
-            authStore: ClaudeAuthStore(
-                standardDesktopOrganization: defaultClaudeOrganization,
-                allowsUnpinnedStandardDesktopFallback: claudeCards.isEmpty
-            ),
-            logUsageScanner: ClaudeLogUsageScanner(
-                additionalRoots: defaultClaudeExtraLogRoots,
-                coworkRootsOverride: defaultClaudeCoworkRoots
-            )
-        ))
-        for card in claudeCards {
-            runtimes.append(claudeAccountRuntime(card: card))
+
+        if claude.cards.isEmpty, claude.allowsUnboundFallback {
+            // Preserve the existing spend-only / unresolved-identity behavior when discovery
+            // cannot prove any Claude account. Once an account is verified, every Claude runtime
+            // comes from its record instead; there is never a second hardcoded default card.
+            runtimes.append(ClaudeProvider(
+                authStore: ClaudeAuthStore(
+                    allowsUnpinnedStandardDesktopFallback: claude.defaultCoworkRoots == nil
+                ),
+                logUsageScanner: ClaudeLogUsageScanner(
+                    coworkRootsOverride: claude.defaultCoworkRoots
+                )
+            ))
+        } else {
+            runtimes += claude.cards.map(claudeAccountRuntime)
         }
-        runtimes.sort { $0.provider.id == "claude" && $1.provider.id != "claude" }
+
+        // The three established families remain first, followed by the alphabetical provider tail.
+        // Account instances sit together before Codex regardless of which one holds the default.
         runtimes += [
             CodexProvider(),
             CursorProvider(),
@@ -62,23 +42,43 @@ enum ProviderCatalog {
         return runtimes
     }
 
-    /// An extra Claude account card: same provider machinery, credentials and logs pinned to one
-    /// login (a config-dir home, or Claude Desktop's org-pinned cache for a Cowork account). The
-    /// scanner's parse cache is partitioned per card so distinct homes never share records.
-    private static func claudeAccountRuntime(card: ClaudeAccountCard) -> ClaudeProvider {
-        let scope: ClaudeCredentialScope = switch card.credential {
+    private static func claudeAccountRuntime(_ card: ClaudeAccountCard) -> ClaudeProvider {
+        let authStore: ClaudeAuthStore
+        let scanner: ClaudeLogUsageScanner
+
+        switch card.credential {
+        case .defaultHome:
+            authStore = ClaudeAuthStore(
+                scope: .standard,
+                desktopAccessPolicy: card.desktopAccess,
+                allowsUnscopedStandardKeychainFallback: card.allowsUnscopedKeychainFallback
+            )
+            scanner = ClaudeLogUsageScanner(
+                cacheIdentityOverride: card.id == "claude" ? nil : "claude-account:\(card.id)",
+                additionalRoots: card.additionalLogRoots,
+                coworkRootsOverride: card.coworkRootsOverride
+            )
         case .configDir(let path, let keychainLiteral):
-            .configDir(path: path, keychainLiteral: keychainLiteral)
-        case .desktop(let organization):
-            .desktopOnly(organization: organization)
-        }
-        return ClaudeProvider(
-            provider: ClaudeProvider.makeProvider(id: card.id, displayName: card.displayName),
-            authStore: ClaudeAuthStore(scope: scope),
-            logUsageScanner: ClaudeLogUsageScanner(
+            authStore = ClaudeAuthStore(
+                scope: .configDir(path: path, keychainLiteral: keychainLiteral)
+            )
+            scanner = ClaudeLogUsageScanner(
                 cacheIdentityOverride: "claude-account:\(card.id)",
                 rootsOverride: card.logRoots
             )
+        case .desktop(let organization):
+            authStore = ClaudeAuthStore(scope: .desktopOnly(organization: organization))
+            scanner = ClaudeLogUsageScanner(
+                cacheIdentityOverride: "claude-account:\(card.id)",
+                rootsOverride: card.logRoots
+            )
+        }
+
+        return ClaudeProvider(
+            provider: ClaudeProvider.makeProvider(id: card.id, displayName: card.displayName),
+            authStore: authStore,
+            logUsageScanner: scanner,
+            expectedIdentityKey: card.identityKey
         )
     }
 }
