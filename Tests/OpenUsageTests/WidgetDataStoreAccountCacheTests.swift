@@ -34,14 +34,16 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
         providers: [Provider],
         cache: ProviderSnapshotCache,
         defaults: UserDefaults,
-        identityKeys: [String: String]
+        identityKeys: [String: String],
+        quarantinesUnverifiedAccountData: Bool = false
     ) -> WidgetDataStore {
         WidgetDataStore(
             registry: WidgetRegistry(providers: providers, descriptors: []),
             providers: [],
             cache: cache,
             defaults: defaults,
-            providerIdentityKeys: identityKeys
+            providerIdentityKeys: identityKeys,
+            quarantinesUnverifiedAccountData: quarantinesUnverifiedAccountData
         )
     }
 
@@ -96,6 +98,24 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
         )
         XCTAssertNotNil(store.snapshots["claude"])
         XCTAssertNotNil(store.snapshots["codex"])
+    }
+
+    func testProvisionalQuarantineSuppressesAccountCachesButKeepsOtherProviders() {
+        let defaults = makeUserDefaults("provisional")
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots", ttl: 600, now: Date.init)
+        cache.store(snapshot("claude", used: 40), producedByIdentityKey: "previous-account")
+        cache.store(snapshot("codex", used: 50), producedByIdentityKey: "another-previous-account")
+        cache.store(snapshot("cursor", used: 60))
+
+        let store = makeStore(
+            providers: [provider("claude"), provider("codex"), provider("cursor")],
+            cache: cache, defaults: defaults, identityKeys: [:],
+            quarantinesUnverifiedAccountData: true
+        )
+
+        XCTAssertNil(store.snapshots["claude"])
+        XCTAssertNil(store.snapshots["codex"])
+        XCTAssertNotNil(store.snapshots["cursor"])
     }
 
     /// Non-account providers are untouched by the guard: their entries load with or without a stamp

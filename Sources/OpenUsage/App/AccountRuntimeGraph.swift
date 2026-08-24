@@ -26,6 +26,7 @@ final class AccountRuntimeGraph {
     }
 
     func retireCurrentState() {
+        state.codexResetClaim?.retireForAccountGraphReload()
         state.dataStore.retireForAccountGraphReload()
         runtimeTasks = nil
         resetDetection = nil

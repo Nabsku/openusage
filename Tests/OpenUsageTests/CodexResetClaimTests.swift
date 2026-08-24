@@ -328,6 +328,31 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertTrue(http.requests.isEmpty)
     }
 
+    func testRetiredAccountNeverConsumesAfterSuspendedCreditLookup() async {
+        let gate = ResetClaimRequestGate()
+        let http = RoutingHTTPClient { request in
+            if request.url == CodexUsageClient.resetCreditsURL {
+                await gate.wait()
+                return HTTPResponse(statusCode: 200, headers: [:], body: Self.listBody())
+            }
+            return HTTPResponse(statusCode: 200, headers: [:], body: Self.consumeBody(code: "reset"))
+        }
+        let service = CodexResetClaimService(
+            usageClient: CodexUsageClient(http: http),
+            credentialCandidates: { [("old-account-token", "acct-A")] },
+            expectedIdentityKey: "acct-A"
+        )
+        let claim = Task { await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1") }
+        while await !gate.isWaiting { await Task.yield() }
+
+        service.retireForAccountGraphReload()
+        await gate.release()
+
+        let result = await claim.value
+        XCTAssertEqual(result, .failed)
+        XCTAssertFalse(http.requests.contains { $0.url == CodexUsageClient.consumeResetCreditURL })
+    }
+
     func testClaimFailsWhenEveryCandidateIsRejected() async {
         let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
         let service = CodexResetClaimService(
@@ -339,5 +364,19 @@ final class CodexResetClaimTests: XCTestCase {
 
         XCTAssertEqual(outcome, .failed)
         XCTAssertEqual(http.requests.count, 2, "every candidate is tried once, then the claim fails loudly")
+    }
+}
+
+private actor ResetClaimRequestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    var isWaiting: Bool { continuation != nil }
+
+    func wait() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
     }
 }

@@ -79,7 +79,8 @@ final class AppContainer {
         let notificationSettings = NotificationSettingsStore()
         let runtime = Self.makeAccountRuntime(
             assembly: accountAssembly, accounts: accounts,
-            enablement: enablement, notificationSettings: notificationSettings
+            enablement: enablement, notificationSettings: notificationSettings,
+            quarantinesUnverifiedAccountData: true
         )
         runtime.iCloudSync.shutdownForAccountGraphReload()
         let providers = runtime.providers
@@ -147,6 +148,9 @@ final class AppContainer {
             // exactly like every UI surface.
             .resolvingDisplayNames(accounts.resolvedDisplayNamesByCardID)
         })
+        accountGraph.runtimeTasks = AccountRuntimeTaskLifetime([
+            Self.startPeriodicRefresh(dataStore: dataStore, telemetry: telemetry)
+        ])
         localAPI.start()
         accountGraph.accountWatcher = AccountRuntimeTaskLifetime([
             Self.startAccountGraphWatch(accounts: accounts, initialAssembly: accountAssembly) { [weak self] assembly in
@@ -170,7 +174,8 @@ final class AppContainer {
         accounts: ProviderAccountsStore,
         enablement: ProviderEnablementStore,
         notificationSettings: NotificationSettingsStore,
-        snapshotCache: ProviderSnapshotCache = ProviderSnapshotCache()
+        snapshotCache: ProviderSnapshotCache = ProviderSnapshotCache(),
+        quarantinesUnverifiedAccountData: Bool = false
     ) -> AccountRuntimeGraph.State {
         let providers = ProviderCatalog.make(accountAssembly: assembly)
         let registry = WidgetRegistry.from(providers)
@@ -190,6 +195,7 @@ final class AppContainer {
                     [record.identityKey] + (record.identityAliases ?? [])
                 )
             },
+            quarantinesUnverifiedAccountData: quarantinesUnverifiedAccountData,
             resolveDisplayName: { [accounts] in accounts.resolvedDisplayName(cardID: $0) }
         )
         let iCloudSync = ICloudUsageSyncStore(dataStore: dataStore)

@@ -31,6 +31,7 @@ final class CodexResetClaimService {
     private let credentialCandidates: () async -> [Credentials]
     private let expectedIdentityKey: String?
     private let refreshAfterClaim: () async -> Void
+    private var isRetiredForAccountGraphReload = false
     /// The credit id each idempotency key was matched to, kept for the key's retries: if a consume
     /// succeeded but its response was lost, the credit is gone from a re-fetched list — a fresh match
     /// would misread the retry as "no longer available" instead of replaying the POST and letting the
@@ -85,6 +86,7 @@ final class CodexResetClaimService {
     /// Claims the credit expiring at `expiry`. Never throws — every failure mode is logged loudly and
     /// collapsed to an outcome the popover can render.
     func claim(creditExpiringAt expiry: Date, redeemRequestID: String) async -> ResetClaimOutcome {
+        guard !isRetiredForAccountGraphReload else { return .failed }
         let candidates = await credentialCandidates().filter { candidate in
             guard let expectedIdentityKey else { return true }
             return candidate.accountID?.caseInsensitiveCompare(expectedIdentityKey) == .orderedSame
@@ -123,7 +125,7 @@ final class CodexResetClaimService {
             }
         }
 
-        guard !preferredCandidates.isEmpty else {
+        guard !isRetiredForAccountGraphReload, !preferredCandidates.isEmpty else {
             AppLog.error(LogTag.plugin("codex"), "reset claim: the original account is no longer signed in")
             return .failed
         }
@@ -137,6 +139,10 @@ final class CodexResetClaimService {
             await refreshAfterClaim()
         }
         return outcome
+    }
+
+    func retireForAccountGraphReload() {
+        isRetiredForAccountGraphReload = true
     }
 
     private static func belongsToSameAccount(_ candidate: Credentials, as original: Credentials) -> Bool {
@@ -155,6 +161,7 @@ final class CodexResetClaimService {
     ) async -> ResetClaimOutcome {
         var lastRejection: Int?
         for credentials in candidates {
+            guard !isRetiredForAccountGraphReload else { return .failed }
             let response: HTTPResponse
             do {
                 response = try await usageClient.consumeResetCredit(

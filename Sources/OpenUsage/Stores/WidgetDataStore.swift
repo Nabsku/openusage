@@ -39,6 +39,7 @@ final class WidgetDataStore {
     /// unresolved identity this launch (or isn't account-aware) — its cache behaves as it always did.
     @ObservationIgnored private var providerIdentityKeys: [String: String]
     @ObservationIgnored private var knownAccountIdentitiesByFamily: [String: Set<String>]
+    private let quarantinesUnverifiedAccountData: Bool
     /// The live card title for a card id, `nil` for non-account providers — the account-registry
     /// name resolver, injected by `AppContainer` so notification titles carry renames. `nil`
     /// (tests, the one-shot CLI) falls back to the baked derived name.
@@ -155,6 +156,7 @@ final class WidgetDataStore {
         postNotification: (@MainActor (String, String, String, String) async -> Bool)? = nil,
         providerIdentityKeys: [String: String] = [:],
         knownAccountIdentitiesByFamily: [String: Set<String>] = [:],
+        quarantinesUnverifiedAccountData: Bool = false,
         resolveDisplayName: (@MainActor (String) -> String?)? = nil
     ) {
         precondition(slowProviderRefreshThreshold >= 0)
@@ -193,6 +195,7 @@ final class WidgetDataStore {
             }
         }
         self.knownAccountIdentitiesByFamily = knownIdentities
+        self.quarantinesUnverifiedAccountData = quarantinesUnverifiedAccountData
         self.resolveDisplayName = resolveDisplayName
         self.meterStyle = defaults.enumValue(forKey: Self.meterStyleKey, default: .remaining)
         self.resetDisplayMode = defaults.enumValue(forKey: Self.resetDisplayModeKey, default: .relative)
@@ -209,6 +212,12 @@ final class WidgetDataStore {
         // keeps its cache, exactly as before the guard existed. Non-account providers are unaffected.
         let loaded = cache.loadSnapshots(providerIDs: registry.providers.map(\.id))
             .filter { cardID, _ in
+                if quarantinesUnverifiedAccountData,
+                   ProviderAccountID.families.contains(ProviderAccountID.family(of: cardID)),
+                   providerIdentityKeys[cardID] == nil
+                {
+                    return false
+                }
                 guard cache.hasStaleAccountStamp(providerID: cardID, currentIdentityKey: providerIdentityKeys[cardID]) else {
                     return true
                 }
@@ -318,6 +327,12 @@ final class WidgetDataStore {
         notifyHistoryChange: Bool = true
     ) async -> RefreshOutcome {
         guard !isRetiredForAccountGraphReload, !Task.isCancelled, isProviderEnabled(providerID) else {
+            return .skipped
+        }
+        if quarantinesUnverifiedAccountData,
+           ProviderAccountID.families.contains(ProviderAccountID.family(of: providerID)),
+           providerIdentityKeys[providerID] == nil
+        {
             return .skipped
         }
         // A TTL-fresh entry that provably belongs to another account (swap since it was written) must
