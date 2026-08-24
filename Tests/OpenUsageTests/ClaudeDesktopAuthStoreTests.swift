@@ -376,16 +376,22 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
 
     @MainActor
     func testDesktopProfileRejectsAnotherUserEvenWhenTheOrganizationMatches() async throws {
-        for (observedUser, observedOrganization, matches) in [
-            (account, organization, true),
-            ("ffffffff-ffff-4fff-8fff-ffffffffffff", organization, false),
-            (account, otherOrganization, false)
+        for (observedUser, observedOrganization, unbound, matches) in [
+            (account, Optional(organization), false, true),
+            ("ffffffff-ffff-4fff-8fff-ffffffffffff", Optional(organization), false, false),
+            (account, Optional(otherOrganization), false, false),
+            (account, nil, false, false),
+            (account, Optional(otherOrganization), true, false),
+            (account, Optional(organization), true, true)
         ] {
             let fixture = try makeFixture(
                 activeOrganization: organization,
                 v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
             )
-            let profile = Data(#"{"account":{"uuid":"\#(observedUser)"},"organization":{"uuid":"\#(observedOrganization)"}}"#.utf8)
+            let organizationField = observedOrganization.map {
+                ",\"organization\":{\"uuid\":\"\($0)\"}"
+            } ?? ""
+            let profile = Data("{\"account\":{\"uuid\":\"\(observedUser)\"}\(organizationField)}".utf8)
             let httpClient = RoutingHTTPClient { request in
                 if request.url.path == "/api/oauth/profile" {
                     XCTAssertEqual(request.headers["Authorization"], "Bearer desktop-token")
@@ -397,8 +403,8 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             let provider = ClaudeProvider(
                 authStore: ClaudeAuthStore(
                     files: fixture.files, keychain: FakeKeychain(), desktop: fixture.store,
-                    scope: .desktopOnly(organization: organization),
-                    expectedIdentityKey: "\(account)|\(organization)", now: { now }
+                    scope: unbound ? .standard : .desktopOnly(organization: organization),
+                    expectedIdentityKey: unbound ? nil : "\(account)|\(organization)", now: { now }
                 ),
                 usageClient: ClaudeUsageClient(httpClient: httpClient),
                 logUsageScanner: ClaudeLogFixture.scanner(home: nil), now: { now },

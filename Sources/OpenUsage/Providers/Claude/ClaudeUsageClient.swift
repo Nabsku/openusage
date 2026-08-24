@@ -93,11 +93,9 @@ struct ClaudeUsageClient: Sendable {
         guard (200..<300).contains(response.statusCode),
               let profile = try? JSONDecoder().decode(AccountProfile.self, from: response.body),
               profile.account.uuid.caseInsensitiveCompare(expected.user) == .orderedSame,
-              profile.organization.map({ organization in
-                  expected.organization.map {
-                      organization.uuid.caseInsensitiveCompare($0) == .orderedSame
-                  } ?? true
-              }) ?? true
+              expected.organization.map { expectedOrganization in
+                  profile.organization?.uuid.caseInsensitiveCompare(expectedOrganization) == .orderedSame
+              } ?? true
         else {
             AppLog.warn(LogTag.auth("claude"), "Claude Desktop account ownership could not be verified")
             throw ClaudeAuthError.desktopCredentialsUnavailable

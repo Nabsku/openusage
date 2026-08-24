@@ -102,7 +102,8 @@ struct ClaudeAuthStore: Sendable {
                     oauth: oauth,
                     source: .desktop,
                     fullData: nil,
-                    inferenceOnly: false
+                    inferenceOnly: false,
+                    desktopOrganization: result.organization
                 ), at: 0)
             }
         }

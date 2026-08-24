@@ -253,13 +253,13 @@ final class ClaudeProvider: ProviderRuntime {
         if state.source == .desktop {
             guard let identityKey = authStore.expectedIdentityKey ?? authStore.desktop.lastKnownAccountUUID(),
                   let account = ClaudeIdentity(identityKey),
-                  let accessToken = state.oauth.accessToken
+                  let accessToken = state.oauth.accessToken,
+                  let organization = state.desktopOrganization,
+                  account.organization.map({
+                      $0.caseInsensitiveCompare(organization) == .orderedSame
+                  }) ?? true,
+                  let expected = ClaudeIdentity("\(account.user)|\(organization)")
             else { throw ClaudeAuthError.desktopCredentialsUnavailable }
-            let expected = account.organization == nil
-                ? authStore.standardDesktopOrganization.flatMap {
-                    ClaudeIdentity("\(account.user)|\($0)")
-                } ?? account
-                : account
             let fingerprint = Data(SHA256.hash(data: Data("\(expected.key)\u{0}\(accessToken)".utf8)))
             if verifiedDesktopCredentialFingerprint != fingerprint {
                 try await usageClient.verifyDesktopAccount(accessToken: accessToken, expected: expected)

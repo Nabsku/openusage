@@ -326,7 +326,11 @@ struct ProviderAccountAssembly {
             var quarantinedUnidentifiedSandbox = false
             for sandbox in scan.truncated ? [] : scan.sandboxes {
                 guard let rawIdentity = sandbox.identityKey else {
-                    quarantinedUnidentifiedSandbox = true
+                    if defaultKey != nil, !desktopPolicy.hasMultipleAccounts {
+                        defaultBucket.append(sandbox.root)
+                    } else {
+                        quarantinedUnidentifiedSandbox = true
+                    }
                     continue
                 }
                 guard let key = desktopPolicy.canonical(rawIdentity) else {

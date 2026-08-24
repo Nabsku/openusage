@@ -16,6 +16,7 @@ enum ClaudeDesktopCredentialStatus: Sendable, Equatable {
 struct ClaudeDesktopCredentialResult: Sendable {
     var oauth: ClaudeOAuth?
     var status: ClaudeDesktopCredentialStatus
+    var organization: String? = nil
 }
 
 protocol ClaudeDesktopSafeStorageKeyReading: Sendable {
@@ -166,7 +167,9 @@ struct ClaudeDesktopAuthStore: Sendable {
             )
             switch selection {
             case .available(let oauth):
-                return ClaudeDesktopCredentialResult(oauth: oauth, status: .available)
+                return ClaudeDesktopCredentialResult(
+                    oauth: oauth, status: .available, organization: targetOrganization
+                )
             case .stale:
                 return ClaudeDesktopCredentialResult(oauth: nil, status: .stale)
             case .notFound:

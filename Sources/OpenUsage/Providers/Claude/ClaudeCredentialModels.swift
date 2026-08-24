@@ -37,6 +37,7 @@ struct ClaudeCredentialState: Hashable, Sendable {
     var source: Source
     var fullData: ClaudeCredentialsFile?
     var inferenceOnly: Bool
+    var desktopOrganization: String? = nil
 
     /// Whether this candidate carries a non-blank access token — the single definition of "usable"
     /// shared by `refresh()`'s candidate filter and `hasLocalCredentials()`'s first-run detection, so
@@ -70,10 +71,12 @@ struct ClaudeCredentialGeneration: Equatable, Sendable {
     struct Candidate: Equatable, Sendable {
         let oauth: ClaudeOAuth
         let source: ClaudeCredentialState.Source
+        let desktopOrganization: String?
 
         init(_ state: ClaudeCredentialState) {
             oauth = state.oauth
             source = state.source
+            desktopOrganization = state.desktopOrganization
         }
     }
 
