@@ -44,7 +44,7 @@ enum ProviderCatalog {
                     verifiedIdentityAliases: defaultClaudeVerifiedIdentityAliases
                 ),
                 logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots),
-                allowsUnattributedPiUsage: claudeCards.isEmpty
+                allowsUnattributedPiUsage: claudeCards.isEmpty && isClaudeDiscoveryComplete
             ))
         }
         for card in claudeCards {

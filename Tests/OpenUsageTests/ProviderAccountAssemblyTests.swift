@@ -456,6 +456,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
         XCTAssertFalse(provider.authStore.allowsDesktopFallback)
+        XCTAssertFalse(provider.allowsUnattributedPiUsage)
     }
 
     func testAccountSwapKeepsTheOriginalCardBoundToItsOwnConfigDirectory() throws {
