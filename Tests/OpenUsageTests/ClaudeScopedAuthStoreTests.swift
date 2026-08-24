@@ -92,11 +92,12 @@ final class ClaudeScopedAuthStoreTests: XCTestCase {
         XCTAssertEqual(files.files[credentialPath], original)
     }
 
-    func testOrganizationlessIdentityMatchesOnlyAnExplicitlyPinnedOrganization() {
-        let scenarios: [(organization: String?, policy: ClaudeDesktopAccessPolicy, matches: Bool)] = [
-            (nil, .pinned("org-work"), true),
-            (nil, .activeOrganization, false),
-            ("org-other", .pinned("org-work"), false),
+    func testOrganizationlessIdentityMatchesOnlyVerifiedSourceEvidence() {
+        let scenarios: [(organization: String?, policy: ClaudeDesktopAccessPolicy, verified: Bool, matches: Bool)] = [
+            (nil, .denied, true, true),
+            (nil, .activeOrganization, true, true),
+            (nil, .pinned("org-work"), false, false),
+            ("org-other", .pinned("org-work"), true, false),
         ]
 
         for scenario in scenarios {
@@ -108,6 +109,7 @@ final class ClaudeScopedAuthStoreTests: XCTestCase {
                 keychain: ServiceKeychain(),
                 scope: scope,
                 expectedIdentityKey: "account-a|org-work",
+                verifiedIdentityAliases: scenario.verified ? [ClaudeIdentity("account-a")!] : [],
                 desktopAccessPolicy: scenario.policy
             )
 

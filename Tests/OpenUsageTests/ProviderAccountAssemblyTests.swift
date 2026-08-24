@@ -264,7 +264,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         XCTAssertEqual(store.records.map(\.id), ["claude"])
         XCTAssertEqual(assembly.identityKeysByCard["claude"], "acct-1|org-1")
-        XCTAssertEqual(assembly.defaultClaudeVerifiedIdentityAliases, ["acct-1"])
+        XCTAssertEqual(assembly.defaultClaudeVerifiedIdentityAliases, [try XCTUnwrap(ClaudeIdentity("acct-1"))])
         XCTAssertTrue(assembly.claudeCards.isEmpty)
         XCTAssertEqual(assembly.defaultClaudeExtraLogRoots.map(\.path), ["/Users/dev/.claude-work"])
         XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "My Work Account")
@@ -324,7 +324,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(assembly.claudeCards.map(\.id), ["claude@work"])
         XCTAssertEqual(card.identityKey, "work|org")
         XCTAssertEqual(assembly.identityKeysByCard[card.id], "work|org")
-        XCTAssertEqual(card.verifiedIdentityAliases, ["work"])
+        XCTAssertEqual(card.verifiedIdentityAliases, [try XCTUnwrap(ClaudeIdentity("work"))])
 
         let runtime = try XCTUnwrap(ProviderCatalog.make(
             claudeCards: assembly.claudeCards,
@@ -425,6 +425,35 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             keychain: FakeKeychain(nil),
             homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
         )
+    }
+
+    func testOrganizationlessConfigLoginCarriesOnlyItsVerifiedIdentityAlias() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let path = "/Users/dev/.claude-work"
+        let sandbox = "\(coworkBase)/local_work/.claude"
+        let config = makeDiscovery(files: [
+            path + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work-user"}}"#,
+            path + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"work"}}"#,
+        ], subdirectories: [path])
+        let cowork = makeCoworkDiscovery(files: [
+            sandbox + "/.claude.json":
+                #"{"oauthAccount":{"accountUuid":"work-user","organizationUuid":"work-org"}}"#,
+        ], sandboxes: [sandbox])
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: makeDefaultResolvedObserver(), accountsStore: store,
+            claudeDiscovery: config, coworkDiscovery: cowork
+        )
+        let card = try XCTUnwrap(assembly.claudeCards.first)
+        let provider = try XCTUnwrap(ProviderCatalog.make(
+            claudeCards: assembly.claudeCards,
+            claudeIdentityKeys: assembly.identityKeysByCard,
+            defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
+        ).compactMap { $0 as? ClaudeProvider }.first { $0.provider.id == card.id })
+
+        XCTAssertEqual(card.identityKey, "work-user|work-org")
+        XCTAssertEqual(card.verifiedIdentityAliases, [try XCTUnwrap(ClaudeIdentity("work-user"))])
+        XCTAssertEqual(provider.authStore.verifiedIdentityAliases, card.verifiedIdentityAliases)
     }
 
     func testDefaultAccountSandboxesLeaveTheBuiltInCoworkWalkUntouched() {

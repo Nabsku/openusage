@@ -75,6 +75,7 @@ final class ClaudeDesktopOwnershipTests: XCTestCase {
 
         XCTAssertTrue(assembly.claudeCards.isEmpty)
         XCTAssertEqual(assembly.identityKeysByCard["claude"], "primary|team")
+        XCTAssertEqual(assembly.defaultClaudeVerifiedIdentityAliases, [ClaudeIdentity("primary")!])
         XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .pinned("team"))
     }
 

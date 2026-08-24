@@ -19,7 +19,7 @@ struct ClaudeAuthStore: Sendable {
     let scope: ClaudeCredentialScope
     let expectedIdentityKey: String?
     /// Aliases explicitly verified against this card's selected credential source at launch.
-    let verifiedIdentityAliases: Set<String>
+    let verifiedIdentityAliases: Set<ClaudeIdentity>
     let desktopAccessPolicy: ClaudeDesktopAccessPolicy
     let allowsUnscopedStandardKeychainFallback: Bool
 
@@ -33,7 +33,7 @@ struct ClaudeAuthStore: Sendable {
         desktop: ClaudeDesktopAuthStore? = nil,
         scope: ClaudeCredentialScope = .standard,
         expectedIdentityKey: String? = nil,
-        verifiedIdentityAliases: Set<String> = [],
+        verifiedIdentityAliases: Set<ClaudeIdentity> = [],
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         desktopAccessPolicy: ClaudeDesktopAccessPolicy? = nil,
         allowsUnscopedStandardKeychainFallback: Bool = true,
@@ -164,7 +164,7 @@ struct ClaudeAuthStore: Sendable {
         return observedIdentity.user == expectedIdentity.user
             && observedIdentity.organization == nil
             && expectedIdentity.organization != nil
-            && verifiedIdentityAliases.contains { ClaudeIdentity($0) == observedIdentity }
+            && verifiedIdentityAliases.contains(observedIdentity)
     }
 
     private func applyingEnvironmentToken(to stored: [ClaudeCredentialState]) -> [ClaudeCredentialState] {

@@ -24,12 +24,12 @@ struct ClaudeAccountCard: Equatable, Sendable {
     /// render time, so a baked name can never be a stale copy of one.
     var displayName: String
     var identityKey: String
+    /// Source identities proven equivalent before organization qualification.
+    var verifiedIdentityAliases: Set<ClaudeIdentity> = []
     var credential: Credential
     /// Every spend-log root the card scans: its config dir(s), plus any Cowork sandboxes this
     /// account produced.
     var logRoots: [URL]
-    /// Only identities observed at this card's verified credential source may authorize aliases.
-    var verifiedIdentityAliases: Set<String> = []
 }
 
 /// The launch-time account pass: read which account is signed in at each family's default home,
@@ -49,10 +49,9 @@ struct ProviderAccountAssembly {
     var defaultClaudeExtraLogRoots: [URL] = []
     /// The default account's derived title; custom names are resolved at presentation boundaries.
     var defaultClaudeDisplayName: String?
-    /// Identity observed at the verified default source, even when its record uses another alias.
-    var defaultClaudeVerifiedIdentityAliases: Set<String> = []
     /// The default runtime follows its account record, even when another account keeps `claude`.
     var defaultClaudeCardID = "claude"
+    var defaultClaudeVerifiedIdentityAliases: Set<ClaudeIdentity> = []
     /// A generic runtime is safe only before any Claude account has ever been identified.
     var allowsUnboundClaudeFallback = true
     /// An incomplete scan cannot prove that an unpinned Desktop login belongs to the default card.
@@ -199,8 +198,12 @@ struct ProviderAccountAssembly {
             configFindings: configScan?.findings ?? [],
             coworkScan: coworkScan
         )
+        var defaultClaudeVerifiedIdentityAliases: Set<ClaudeIdentity> = []
         if let defaultIdentity = identityKeys["claude"] {
             if let canonical = desktopPolicy.canonical(defaultIdentity) {
+                if canonical != defaultIdentity, let verified = ClaudeIdentity(defaultIdentity) {
+                    defaultClaudeVerifiedIdentityAliases.insert(verified)
+                }
                 identityKeys["claude"] = canonical
                 if let index = observations.firstIndex(where: { $0.family == "claude" }) {
                     observations[index].identityKey = canonical
@@ -279,9 +282,11 @@ struct ProviderAccountAssembly {
                     ))
                     plannedCards.append(PlannedClaudeCard(
                         identityKey: identityKey,
+                        verifiedIdentityAliases: ClaudeIdentity(primary.identityKey).flatMap { observed in
+                            observed.key == identityKey ? nil : Set([observed])
+                        } ?? [],
                         credential: .configDir(path: primary.anchorPath, keychainLiteral: primary.keychainLiteral),
-                        logRoots: findings.map { URL(fileURLWithPath: $0.anchorPath) },
-                        verifiedIdentityAliases: [primary.identityKey]
+                        logRoots: findings.map { URL(fileURLWithPath: $0.anchorPath) }
                     ))
                 }
             }
@@ -359,8 +364,7 @@ struct ProviderAccountAssembly {
                 plannedCards.append(PlannedClaudeCard(
                     identityKey: identityKey,
                     credential: .desktop(organization: organization),
-                    logRoots: roots,
-                    verifiedIdentityAliases: [identityKey]
+                    logRoots: roots
                 ))
             }
             if !order.isEmpty || quarantinedUnidentifiedSandbox {
@@ -422,9 +426,9 @@ struct ProviderAccountAssembly {
                 id: record.id,
                 displayName: record.derivedDisplayName,
                 identityKey: record.identityKey,
+                verifiedIdentityAliases: planned.verifiedIdentityAliases,
                 credential: planned.credential,
-                logRoots: planned.logRoots,
-                verifiedIdentityAliases: planned.verifiedIdentityAliases
+                logRoots: planned.logRoots
             ))
             identityKeys[record.id] = record.identityKey
             let kind = if case .desktop = planned.credential { "desktop (cowork)" } else { "config dir" }
@@ -452,8 +456,8 @@ struct ProviderAccountAssembly {
             claudeCards: claudeCards,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
             defaultClaudeDisplayName: defaultClaudeName,
-            defaultClaudeVerifiedIdentityAliases: Set(observedDefaultIdentity.map { [$0] } ?? []),
             defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude",
+            defaultClaudeVerifiedIdentityAliases: defaultClaudeVerifiedIdentityAliases,
             allowsUnboundClaudeFallback: !records.contains { $0.family == "claude" },
             isClaudeDiscoveryComplete: isClaudeDiscoveryComplete,
             allowsUnownedClaudeDesktopFallback: allowsUnownedDesktop,
@@ -465,8 +469,8 @@ struct ProviderAccountAssembly {
     /// One distinct account's card plan before reconciliation assigns its record id.
     private struct PlannedClaudeCard {
         var identityKey: String
+        var verifiedIdentityAliases: Set<ClaudeIdentity> = []
         var credential: ClaudeAccountCard.Credential
         var logRoots: [URL]
-        var verifiedIdentityAliases: Set<String>
     }
 }
