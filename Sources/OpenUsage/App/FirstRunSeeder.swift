@@ -87,12 +87,14 @@ enum FirstRunSeeder {
         enablement: ProviderEnablementStore,
         logPrefix: String
     ) -> Task<Void, Never> {
-        let providerIDs = Set(providers.map(\.provider.id)).intersection(enablement.pendingDetectionIDs)
+        let pendingIDs = enablement.pendingDetectionIDs
+        let providerIDs = Set(providers.map(\.provider.id)).intersection(pendingIDs)
+        let completedIDs = enablement.detectionJob?.mode == .replacement ? pendingIDs : providerIDs
         let pendingProviders = providers.filter { providerIDs.contains($0.provider.id) }
         return Task {
             let detected = await detectLocalProviders(pendingProviders)
             guard !Task.isCancelled else { return }
-            defer { enablement.finishProviderDetection(providerIDs) }
+            defer { enablement.finishProviderDetection(completedIDs) }
             AppLog.info(.config, "\(logPrefix): detected credentials for \(detected.sorted())")
             guard let job = enablement.detectionJob else { return }
             let pendingDetected = detected.intersection(job.ids)

@@ -34,7 +34,12 @@ enum NewProviderSeeder {
         let newIDs = currentIDs.subtracting(enablement.knownIDs)
         let pendingIDs = enablement.pendingDetectionIDs.intersection(currentIDs)
         let detectionIDs = newIDs.union(pendingIDs)
-        guard !detectionIDs.isEmpty else { return nil }
+        guard !detectionIDs.isEmpty else {
+            if enablement.detectionJob?.mode == .replacement {
+                enablement.finishProviderDetection(enablement.pendingDetectionIDs.subtracting(currentIDs))
+            }
+            return nil
+        }
         if let job = enablement.detectionJob,
            job.mode == .replacement,
            enablement.enabledIDs == job.baseline

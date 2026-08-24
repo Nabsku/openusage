@@ -47,7 +47,8 @@ final class FirstRunSeederTests: XCTestCase {
     }
 
     func testDeferredFirstRunDetectionWaitsForVerifiedDesktopAccount() async throws {
-        let enablement = ProviderEnablementStore(defaults: makeDefaults("deferred-desktop"))
+        let defaults = makeDefaults("deferred-desktop")
+        let enablement = ProviderEnablementStore(defaults: defaults)
         let onboarding = OnboardingStore(defaults: makeDefaults("deferred-desktop-onboarding"))
         let provisional: [ProviderRuntime] = [
             stub("claude", hasCredentials: false),
@@ -75,6 +76,8 @@ final class FirstRunSeederTests: XCTestCase {
         await resumed.value
 
         XCTAssertEqual(enablement.enabledIDs, ["claude@desktop", "codex"])
+        XCTAssertNil(enablement.detectionJob)
+        XCTAssertNil(ProviderEnablementStore(defaults: defaults).detectionJob)
     }
 
     func testExistingInstallIsNeverSeeded() async {
