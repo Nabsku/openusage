@@ -20,7 +20,7 @@ enum ProviderCatalog {
         isClaudeDiscoveryComplete: Bool = true,
         allowsUnownedClaudeDesktopFallback: Bool = false,
         defaultClaudeCoworkRoots: [URL]? = nil,
-        defaultClaudeOrganization: String? = nil
+        defaultClaudeDesktopAccess: ClaudeDesktopAccessPolicy? = nil
     ) -> [ProviderRuntime] {
         // Default provider order (see AGENTS.md "## Providers"): the three established providers first,
         // then every other provider alphabetically by display name. Account cards slot in right after
@@ -30,7 +30,9 @@ enum ProviderCatalog {
         // account registry and are resolved at render time (`ProviderAccountRecord.resolvedDisplayName`),
         // so a baked name can never be a stale copy of one.
         var runtimes: [ProviderRuntime] = []
-        if !claudeCards.contains(where: { $0.id == defaultClaudeCardID }) {
+        if (claudeCards.isEmpty || claudeIdentityKeys[defaultClaudeCardID] != nil)
+            && !claudeCards.contains(where: { $0.id == defaultClaudeCardID })
+        {
             runtimes.append(ClaudeProvider(
                 provider: ClaudeProvider.makeProvider(
                     id: defaultClaudeCardID,
@@ -39,9 +41,10 @@ enum ProviderCatalog {
                 authStore: ClaudeAuthStore(
                     expectedIdentityKey: claudeIdentityKeys[defaultClaudeCardID],
                     verifiedIdentityAliases: defaultClaudeVerifiedIdentityAliases,
-                    standardDesktopOrganization: defaultClaudeOrganization,
-                    allowsUnpinnedStandardDesktopFallback: claudeCards.isEmpty
-                        && (isClaudeDiscoveryComplete || allowsUnownedClaudeDesktopFallback)
+                    desktopAccessPolicy: defaultClaudeDesktopAccess
+                        ?? (claudeCards.isEmpty
+                            && (isClaudeDiscoveryComplete || allowsUnownedClaudeDesktopFallback)
+                            ? .activeOrganization : .denied)
                 ),
                 logUsageScanner: ClaudeLogUsageScanner(
                     additionalRoots: defaultClaudeExtraLogRoots,

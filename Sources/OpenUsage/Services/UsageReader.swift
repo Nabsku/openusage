@@ -68,7 +68,7 @@ public struct UsageReader {
             isClaudeDiscoveryComplete: accountAssembly.isClaudeDiscoveryComplete,
             allowsUnownedClaudeDesktopFallback: accountAssembly.allowsUnownedClaudeDesktopFallback,
             defaultClaudeCoworkRoots: accountAssembly.defaultClaudeCoworkRoots,
-            defaultClaudeOrganization: accountAssembly.defaultClaudeOrganization
+            defaultClaudeDesktopAccess: accountAssembly.defaultClaudeDesktopAccess
         )
         let registry = WidgetRegistry.from(providers)
         let knownIDs = Set(registry.providers.map(\.id))

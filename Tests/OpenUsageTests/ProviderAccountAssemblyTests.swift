@@ -386,7 +386,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         DefaultAccountObserver(
             environment: FakeEnvironment([:]),
             files: FakeFiles([
-                "/Users/dev/.claude.json": #"{"oauthAccount": {"accountUuid": "ACCT-1"}}"#,
+                "/Users/dev/.claude.json":
+                    #"{"oauthAccount":{"accountUuid":"ACCT-1","organizationUuid":"ORG-1"}}"#,
             ]),
             keychain: FakeKeychain(nil),
             homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
@@ -428,6 +429,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
 
         XCTAssertTrue(assembly.claudeCards.isEmpty)
         XCTAssertEqual(assembly.defaultClaudeCoworkRoots, [])
+        XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .pinned("org-1"))
         XCTAssertEqual(store.records.count, 1)
     }
 
@@ -447,7 +449,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
 
         let assembly = ProviderAccountAssembly.make(
-            observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork
+            observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork,
+            hasDesktopCredentialMaterial: { true }
         )
 
         let card = try XCTUnwrap(assembly.claudeCards.first)
@@ -512,7 +515,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(store.records.count, 1, "only the default account has a record")
     }
 
-    func testAnUnidentifiedSandboxStaysOnTheDefaultCardEvenWhenAPartitionExists() throws {
+    func testAnUnidentifiedSandboxIsQuarantinedWhenMultipleAccountsExist() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         let nameless = "\(coworkBase)/local_1/.claude"
         let theirs = "\(coworkBase)/local_2/.claude"
@@ -522,13 +525,14 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
 
         let assembly = ProviderAccountAssembly.make(
-            observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork
+            observer: makeDefaultResolvedObserver(), accountsStore: store, coworkDiscovery: cowork,
+            hasDesktopCredentialMaterial: { true }
         )
 
         XCTAssertEqual(assembly.claudeCards.count, 1)
         XCTAssertEqual(
-            assembly.defaultClaudeCoworkRoots?.map(\.path), [nameless],
-            "a sandbox naming no account keeps counting on the default card, as the built-in walk always has"
+            assembly.defaultClaudeCoworkRoots?.map(\.path), [],
+            "an unidentified sandbox cannot safely be attributed when multiple accounts exist"
         )
     }
 
@@ -669,7 +673,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             claudeCards: assembly.claudeCards,
             defaultClaudeExtraLogRoots: assembly.defaultClaudeExtraLogRoots,
             defaultClaudeDisplayName: assembly.defaultClaudeDisplayName,
-            defaultClaudeCardID: assembly.defaultClaudeCardID
+            defaultClaudeCardID: assembly.defaultClaudeCardID,
+            claudeIdentityKeys: assembly.identityKeysByCard
         ).compactMap { $0 as? ClaudeProvider }
         XCTAssertEqual(runtimes.first?.provider.id, "claude")
         XCTAssertEqual(runtimes.first?.authStore.scope,

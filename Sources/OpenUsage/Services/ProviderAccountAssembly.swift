@@ -61,16 +61,7 @@ struct ProviderAccountAssembly {
     /// Cowork walk (that account's sessions must not bleed into the default card's spend). `nil`
     /// keeps the scanner's built-in walk byte-identical.
     var defaultClaudeCoworkRoots: [URL]?
-
-    /// The default Claude account's org UUID, parsed from its identity key (`uuid|org`) — the pin
-    /// the default card's Desktop fallback reads under once other Claude cards exist. `nil` when
-    /// the default identity is unresolved or the account has no org.
-    var defaultClaudeOrganization: String? {
-        guard let key = identityKeysByCard[defaultClaudeCardID],
-              let separator = key.firstIndex(of: "|")
-        else { return nil }
-        return String(key[key.index(after: separator)...]).nilIfEmpty
-    }
+    var defaultClaudeDesktopAccess: ClaudeDesktopAccessPolicy = .activeOrganization
 
     /// `waitsForLoginShell`: true for the menu-bar app (a Finder/Dock launch inherits no shell
     /// exports, so the pass leans on the login-shell layers), false for the one-shot CLI (a terminal
@@ -137,7 +128,10 @@ struct ProviderAccountAssembly {
         accountsStore: ProviderAccountsStore,
         families: Set<String> = ProviderAccountID.families,
         claudeDiscovery: ClaudeConfigDirDiscovery? = nil,
-        coworkDiscovery: ClaudeCoworkDiscovery? = nil
+        coworkDiscovery: ClaudeCoworkDiscovery? = nil,
+        hasDesktopCredentialMaterial: @Sendable () -> Bool = {
+            ClaudeDesktopAuthStore().hasCredentialMaterial()
+        }
     ) -> ProviderAccountAssembly {
         var identityKeys: [String: String] = [:]
         var observations: [ProviderAccountsStore.AccountObservation] = []
@@ -191,18 +185,42 @@ struct ProviderAccountAssembly {
                 claudeCandidatesAllowed = true
             }
         }
-        if let claudeDiscovery, claudeCandidatesAllowed {
+        let configScan = claudeCandidatesAllowed
+            ? claudeDiscovery?.run(prioritizing: Set(preferredConfigAnchors.values))
+            : nil
+        isClaudeDiscoveryComplete = configScan?.truncated != true
+        let coworkScan = claudeCandidatesAllowed ? coworkDiscovery?.run() : nil
+        let desktopPolicy = ClaudeDesktopAccountPolicy(
+            records: accountsStore.records,
+            defaultOutcome: claudeOutcome,
+            configFindings: configScan?.findings ?? [],
+            coworkScan: coworkScan
+        )
+        if let defaultIdentity = identityKeys["claude"] {
+            if let canonical = desktopPolicy.canonical(defaultIdentity) {
+                identityKeys["claude"] = canonical
+                if let index = observations.firstIndex(where: { $0.family == "claude" }) {
+                    observations[index].identityKey = canonical
+                }
+            } else {
+                claudeCandidatesAllowed = false
+                defaultClaudeCoworkRoots = []
+                AppLog.warn(.config, "discovery: Claude's default account matches multiple organizations; account routing quarantined")
+            }
+        }
+        if let scan = configScan, claudeCandidatesAllowed {
             let defaultKey = identityKeys["claude"]
-            let scan = claudeDiscovery.run(prioritizing: Set(preferredConfigAnchors.values))
-            isClaudeDiscoveryComplete = !scan.truncated
             for note in scan.notes {
                 AppLog.info(.config, "discovery: \(note)")
             }
             var order: [String] = []
             var grouped: [String: [ClaudeConfigDirDiscovery.Finding]] = [:]
             for finding in scan.findings where isClaudeDiscoveryComplete {
+                guard let canonical = desktopPolicy.canonical(finding.identityKey) else { continue }
                 let records = accountsStore.records.filter {
-                    $0.family == "claude" && $0.matches(identityKey: finding.identityKey)
+                    $0.family == "claude"
+                        && ($0.matches(identityKey: finding.identityKey)
+                            || $0.matches(identityKey: canonical))
                 }
                 guard records.count <= 1 else {
                     isClaudeDiscoveryComplete = false
@@ -210,7 +228,7 @@ struct ProviderAccountAssembly {
                     grouped.removeAll()
                     break
                 }
-                let identityKey = records.first?.identityKey ?? finding.identityKey
+                let identityKey = records.first?.identityKey ?? canonical
                 if grouped[identityKey] == nil { order.append(identityKey) }
                 grouped[identityKey, default: []].append(finding)
             }
@@ -273,9 +291,8 @@ struct ProviderAccountAssembly {
         // Desktop-backed card (org-pinned Safe Storage credentials) with its sandboxes as the
         // card's spend logs. The moment any non-default sandbox exists, the default card's walk is
         // partitioned so another account's sessions can't bleed into its spend.
-        if let coworkDiscovery, claudeCandidatesAllowed {
+        if let scan = coworkScan, claudeCandidatesAllowed {
             let defaultKey = identityKeys["claude"]
-            let scan = coworkDiscovery.run()
             for note in scan.notes {
                 AppLog.info(.config, "discovery: \(note)")
             }
@@ -285,10 +302,21 @@ struct ProviderAccountAssembly {
             var defaultBucket: [URL] = []
             var order: [String] = []
             var grouped: [String: [ClaudeCoworkDiscovery.Sandbox]] = [:]
+            var quarantinedUnidentifiedSandbox = false
             for sandbox in scan.truncated ? [] : scan.sandboxes {
-                guard let key = sandbox.identityKey, key != defaultKey else {
-                    // An unidentified sandbox counts on the default card, exactly where the
-                    // built-in walk has always put it.
+                guard let rawIdentity = sandbox.identityKey else {
+                    if desktopPolicy.hasMultipleAccounts {
+                        quarantinedUnidentifiedSandbox = true
+                    } else {
+                        defaultBucket.append(sandbox.root)
+                    }
+                    continue
+                }
+                guard let key = desktopPolicy.canonical(rawIdentity) else {
+                    quarantinedUnidentifiedSandbox = true
+                    continue
+                }
+                guard key != defaultKey else {
                     defaultBucket.append(sandbox.root)
                     continue
                 }
@@ -311,6 +339,13 @@ struct ProviderAccountAssembly {
                     AppLog.info(.config, "discovery: cowork account \(ProviderAccountID.make(family: "claude", identityKey: identityKey)) has no organization pin → skipped Desktop-backed card")
                     continue
                 }
+                guard hasDesktopCredentialMaterial(),
+                      desktopPolicy.access(for: identityKey, allowsActiveOrganization: false)
+                          == .pinned(organization)
+                else {
+                    AppLog.info(.config, "discovery: desktop credentials absent or their organization has ambiguous ownership → skipped Desktop-backed card")
+                    continue
+                }
                 let label = sandboxes.compactMap(\.label).first
                 observations.append(ProviderAccountsStore.AccountObservation(
                     family: "claude",
@@ -325,7 +360,7 @@ struct ProviderAccountAssembly {
                     verifiedIdentityAliases: [identityKey]
                 ))
             }
-            if !order.isEmpty {
+            if !order.isEmpty || quarantinedUnidentifiedSandbox {
                 defaultClaudeCoworkRoots = defaultBucket
                 AppLog.info(.config, "discovery: cowork partition — default keeps \(defaultBucket.count) sandbox dir(s), \(order.count) other account(s) found")
             }
@@ -386,6 +421,17 @@ struct ProviderAccountAssembly {
             guard record.id != "claude" else { return nil }
             return record.derivedDisplayName
         }
+        let allowsUnownedDesktop = !families.contains("claude")
+            && !records.contains { $0.family == "claude" }
+        let allowsActiveOrganization = (isClaudeDiscoveryComplete || allowsUnownedDesktop)
+            && coworkScan?.truncated != true
+            && !desktopPolicy.hasMultipleAccounts
+            && plannedCards.isEmpty
+        let desktopAccess = if let defaultKey = identityKeys[defaultClaudeRecord?.id ?? "claude"] {
+            desktopPolicy.access(for: defaultKey, allowsActiveOrganization: allowsActiveOrganization)
+        } else {
+            allowsActiveOrganization ? ClaudeDesktopAccessPolicy.activeOrganization : .denied
+        }
         return ProviderAccountAssembly(
             identityKeysByCard: identityKeys,
             claudeCards: claudeCards,
@@ -394,9 +440,9 @@ struct ProviderAccountAssembly {
             defaultClaudeVerifiedIdentityAliases: Set(observedDefaultIdentity.map { [$0] } ?? []),
             defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude",
             isClaudeDiscoveryComplete: isClaudeDiscoveryComplete,
-            allowsUnownedClaudeDesktopFallback:
-                !families.contains("claude") && !records.contains { $0.family == "claude" },
-            defaultClaudeCoworkRoots: defaultClaudeCoworkRoots
+            allowsUnownedClaudeDesktopFallback: allowsUnownedDesktop,
+            defaultClaudeCoworkRoots: defaultClaudeCoworkRoots,
+            defaultClaudeDesktopAccess: desktopAccess
         )
     }
 
