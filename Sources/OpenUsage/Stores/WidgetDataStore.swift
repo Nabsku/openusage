@@ -386,9 +386,7 @@ final class WidgetDataStore {
         if let reporter = provider as? any AccountIdentityReporting {
             let previousIdentity = providerIdentityKeys[providerID]?.lowercased()
             let verifiedIdentity = reporter.verifiedAccountIdentityKey?.lowercased()
-            if verifiedIdentity == nil || verifiedIdentity != previousIdentity
-                || !reporter.isAccountHistorySafeToExport
-            {
+            if verifiedIdentity == nil || verifiedIdentity != previousIdentity {
                 if localSnapshots.removeValue(forKey: providerID) != nil {
                     AppLog.warn(.config, "accounts: \(providerID) ownership changed; previous history discarded")
                 }
@@ -430,7 +428,9 @@ final class WidgetDataStore {
         localSnapshots[providerID] = snapshot
         // Stamp the write with the card's launch-resolved account identity; nil (no stamp) for
         // non-account providers and for cards whose identity didn't resolve this launch.
-        cache.store(snapshot, producedByIdentityKey: providerIdentityKeys[providerID])
+        if (provider as? any AccountIdentityReporting)?.isAccountHistorySafeToExport != false {
+            cache.store(snapshot, producedByIdentityKey: providerIdentityKeys[providerID])
+        }
         rebuildRenderedSnapshots()
         if notifyHistoryChange { onLocalHistoryChanged?() }
         AppLog.info(.refresh, "\(providerID) ok (\(durationMs)ms)")

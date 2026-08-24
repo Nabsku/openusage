@@ -271,6 +271,48 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertEqual(document.identities?["codex"], "account-a")
     }
 
+    func testUnsafeCodexRefreshKeepsLocalHistoryButNeverReplacesTheVerifiedCache() async {
+        let defaults = makeScratchDefaults("CodexUnsafeLocalHistory")
+        let codex = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))
+        let descriptor = WidgetDescriptor.usageTrend(provider: codex)
+            .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test")
+        let verifiedHistory = history(day: "2026-07-16", tokens: 10, cost: 1)
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "codex-unsafe", ttl: 600)
+        cache.store(snapshot(providerID: "codex", history: verifiedHistory), producedByIdentityKey: "account-a")
+
+        let unsafe = AccountReportingRuntime(
+            provider: codex,
+            snapshot: ProviderSnapshot(providerID: "codex", displayName: "Updated Codex", lines: []),
+            identity: "account-a",
+            historySafeToExport: false
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [codex], descriptors: [descriptor]),
+            providers: [unsafe], cache: cache, defaults: defaults,
+            providerIdentityKeys: ["codex": "account-a"]
+        )
+
+        _ = await store.refresh(providerID: "codex", force: true)
+
+        XCTAssertEqual(store.snapshots["codex"]?.usageHistory, verifiedHistory)
+        XCTAssertNil(store.localHistoryDocument(deviceID: "this-mac", deviceName: "This Mac").providers["codex"])
+
+        let coldCache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "codex-unsafe", ttl: 600)
+        XCTAssertEqual(coldCache.loadSnapshots(providerIDs: ["codex"])["codex"]?.displayName, "codex")
+        let coldProvider = CodexProvider(expectedIdentityKey: "account-a")
+        let coldStore = WidgetDataStore(
+            registry: WidgetRegistry(providers: [coldProvider.provider], descriptors: [descriptor]),
+            providers: [coldProvider], cache: coldCache, defaults: defaults,
+            providerIdentityKeys: ["codex": "account-a"]
+        )
+
+        XCTAssertEqual(coldStore.snapshots["codex"]?.usageHistory, verifiedHistory)
+        XCTAssertEqual(
+            coldStore.localHistoryDocument(deviceID: "this-mac", deviceName: "This Mac").providers["codex"],
+            verifiedHistory
+        )
+    }
+
     func testLocalDocumentPublishesAccountCardsWithIdentities() {
         let registry = makeRegistry()
         // Preload the cache; the store's init adopts cached snapshots as its local set. The entries
@@ -427,12 +469,14 @@ final class PeerHistoryIdentityTests: XCTestCase {
         let widgetDescriptors: [WidgetDescriptor] = []
         let snapshot: ProviderSnapshot
         let identity: String?
+        let isAccountHistorySafeToExport: Bool
         private(set) var verifiedAccountIdentityKey: String?
 
-        init(provider: Provider, snapshot: ProviderSnapshot, identity: String?) {
+        init(provider: Provider, snapshot: ProviderSnapshot, identity: String?, historySafeToExport: Bool = true) {
             self.provider = provider
             self.snapshot = snapshot
             self.identity = identity
+            self.isAccountHistorySafeToExport = historySafeToExport
         }
 
         func refresh() async -> ProviderSnapshot {
