@@ -69,6 +69,19 @@ final class ClaudeCoworkDiscoveryTests: XCTestCase {
         XCTAssertNil(result.sandboxes.first?.identityKey)
         XCTAssertTrue(result.notes.contains { $0.contains("quarantined") })
     }
+
+    func testUnreadableSandboxDirectoryCannotMasqueradeAsNoAccounts() {
+        let discovery = ClaudeCoworkDiscovery(
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSandboxes: { _ in throw CocoaError(.fileReadNoPermission) }
+        )
+
+        let result = discovery.run()
+
+        XCTAssertTrue(result.truncated)
+        XCTAssertTrue(result.sandboxes.isEmpty)
+        XCTAssertTrue(result.notes.contains { $0.contains("enumeration failed") })
+    }
 }
 
 private struct UnreadableCoworkFiles: TextFileAccessing {

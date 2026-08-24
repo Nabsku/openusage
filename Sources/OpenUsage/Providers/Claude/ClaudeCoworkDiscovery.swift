@@ -35,9 +35,8 @@ struct ClaudeCoworkDiscovery {
 
     var files: TextFileAccessing
     var homeDirectory: @Sendable () -> URL
-    /// The sandbox walk, injectable for tests; defaults to the scanner's own walk so discovery and
-    /// spend scanning can never see different sandbox sets.
-    var listSandboxes: @Sendable (URL) -> [URL]
+    /// Ownership discovery must distinguish an empty directory from an unreadable directory.
+    var listSandboxes: @Sendable (URL) throws -> [URL]
     /// Wall-clock budget; on overrun the scan returns what it has, flagged `truncated` so the
     /// assembly knows the list is not the whole truth (and retries next launch).
     var timeBudget: TimeInterval
@@ -46,7 +45,7 @@ struct ClaudeCoworkDiscovery {
     init(
         files: TextFileAccessing = LocalTextFileAccessor(),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
-        listSandboxes: @escaping @Sendable (URL) -> [URL] = { ClaudeLogUsageScanner.coworkClaudeDirs(home: $0) },
+        listSandboxes: @escaping @Sendable (URL) throws -> [URL] = Self.ownershipSandboxes,
         // Heavy Desktop users commonly accumulate hundreds of sandbox identities. A subsecond
         // launch budget silently discarded the entire account partition on those real machines.
         timeBudget: TimeInterval = 3,
@@ -62,7 +61,16 @@ struct ClaudeCoworkDiscovery {
     func run() -> Result {
         let started = now()
         var result = Result()
-        for root in listSandboxes(homeDirectory()) {
+        let roots: [URL]
+        do {
+            roots = try listSandboxes(homeDirectory())
+        } catch {
+            result.notes.append("cowork sandbox enumeration failed → account routing quarantined")
+            result.truncated = true
+            AppLog.error(.config, "cowork sandbox enumeration failed; account routing quarantined")
+            return result
+        }
+        for root in roots {
             if Task.isCancelled {
                 result.notes.append("cowork sandbox scan cancelled → skipping incomplete cowork routing")
                 result.truncated = true
@@ -84,12 +92,45 @@ struct ClaudeCoworkDiscovery {
         return result
     }
 
+    private static func ownershipSandboxes(_ home: URL) throws -> [URL] {
+        let base = home.appendingPathComponent(
+            "Library/Application Support/Claude/local-agent-mode-sessions"
+        )
+        func subdirectories(of directory: URL) throws -> [URL] {
+            try FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ).filter { url in
+                let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                return values.isDirectory == true && values.isSymbolicLink != true
+            }
+        }
+        let groups: [URL]
+        do {
+            groups = try subdirectories(of: base)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return []
+        }
+        var roots: [URL] = []
+        for group in groups {
+            for subdirectory in try subdirectories(of: group) {
+                var sessions = try subdirectories(of: subdirectory)
+                for holder in sessions where holder.lastPathComponent == "agent" {
+                    sessions.append(contentsOf: try subdirectories(of: holder))
+                }
+                roots.append(contentsOf: sessions.map { $0.appendingPathComponent(".claude") })
+            }
+        }
+        return roots.sorted { $0.path < $1.path }
+    }
+
     private func sandbox(at root: URL, notes: inout [String], unreadable: inout Bool) -> Sandbox {
         let identityText: String?
         do {
             identityText = try files.readTextIfPresent(root.path + "/.claude.json")
         } catch {
             notes.append("cowork sandbox \(logPath(root.path)): identity file unreadable → account routing quarantined")
+            AppLog.error(.config, "cowork sandbox identity unreadable; account routing quarantined")
             unreadable = true
             return Sandbox(root: root)
         }

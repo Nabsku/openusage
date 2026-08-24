@@ -233,6 +233,15 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         ).first as? ClaudeProvider
         XCTAssertEqual(runtime?.authStore.desktopAccessPolicy, .denied)
         XCTAssertTrue(store.records.isEmpty)
+        XCTAssertFalse(assembly.isClaudeDiscoveryComplete)
+        XCTAssertEqual(assembly.defaultClaudeDesktopAccess, .denied)
+        let provider = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards, claudeIdentityKeys: assembly.identityKeysByCard,
+            isClaudeDiscoveryComplete: assembly.isClaudeDiscoveryComplete,
+            defaultClaudeDesktopAccess: assembly.defaultClaudeDesktopAccess
+        ).first as? ClaudeProvider
+        XCTAssertEqual(provider?.authStore.desktopAccessPolicy, .denied)
+        XCTAssertEqual(provider?.authStore.allowsUnscopedStandardKeychainFallback, false)
     }
 
     func testCanonicalAccountAliasRetainsTheSameCardWithObservedCredentialOwnership() throws {

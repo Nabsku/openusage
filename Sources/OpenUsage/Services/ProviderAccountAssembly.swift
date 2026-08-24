@@ -191,7 +191,7 @@ struct ProviderAccountAssembly {
             ? claudeDiscovery?.run(prioritizing: Set(preferredConfigAnchors.values))
             : nil
         let coworkScan = claudeCandidatesAllowed ? coworkDiscovery?.run() : nil
-        isClaudeDiscoveryComplete = claudeOutcome != nil
+        isClaudeDiscoveryComplete = claudeCandidatesAllowed
             && configScan?.truncated != true
             && coworkScan?.truncated != true
         let desktopPolicy = ClaudeDesktopAccountPolicy(
