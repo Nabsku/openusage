@@ -289,7 +289,12 @@ final class ClaudeProvider: ProviderRuntime {
         // Both scans run on their scanner actors, off the main actor, and do not require an OAuth login.
         let pricing = await pricing()
         let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
-        let piScan = await PiUsageScanner.shared.scan(cardID: provider.id, now: now(), pricing: pricing)
+        let piScan: LogUsageScan?
+        if authStore.scope == .standard {
+            piScan = await PiUsageScanner.shared.scan(cardID: "claude", now: now(), pricing: pricing)
+        } else {
+            piScan = nil
+        }
         var usageHistory: ProviderUsageHistory?
         // Cancellation can land between the native and pi scans. Treat the pair as one unit so a
         // partial result cannot replace the last-good combined history in WidgetDataStore.

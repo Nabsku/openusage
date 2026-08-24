@@ -238,6 +238,58 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(second.claudeCards.first?.displayName, "Work Max")
     }
 
+    func testAccountSwapKeepsTheOriginalCardBoundToItsOwnConfigDirectory() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let original = DefaultAccountObserver(
+            environment: FakeEnvironment(),
+            files: FakeFiles(["/Users/dev/.claude.json":
+                #"{"oauthAccount":{"accountUuid":"ACCOUNT-A"}}"#]),
+            keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        _ = ProviderAccountAssembly.make(observer: original, accountsStore: store)
+        store.rename(cardID: "claude", to: "Personal")
+
+        let replacement = DefaultAccountObserver(
+            environment: FakeEnvironment(),
+            files: FakeFiles(["/Users/dev/.claude.json":
+                #"{"oauthAccount":{"accountUuid":"ACCOUNT-B"}}"#]),
+            keychain: FakeKeychain(),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let path = "/Users/dev/.claude-personal"
+        let discovery = makeDiscovery(
+            files: [
+                path + "/.claude.json": #"{"oauthAccount":{"accountUuid":"ACCOUNT-A"}}"#,
+                path + "/.credentials.json": #"{"claudeAiOauth":{"accessToken":"personal"}}"#,
+            ],
+            subdirectories: [path]
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: replacement, accountsStore: store, claudeDiscovery: discovery
+        )
+        let originalCard = try XCTUnwrap(assembly.claudeCards.first)
+        XCTAssertEqual(originalCard.id, "claude")
+        XCTAssertEqual(originalCard.configDirPath, path)
+        XCTAssertEqual(originalCard.displayName, "Personal")
+        XCTAssertNotEqual(assembly.defaultClaudeCardID, "claude")
+        XCTAssertEqual(assembly.identityKeysByCard["claude"], "account-a")
+        XCTAssertEqual(assembly.identityKeysByCard[assembly.defaultClaudeCardID], "account-b")
+
+        let runtimes = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards,
+            defaultClaudeExtraLogRoots: assembly.defaultClaudeExtraLogRoots,
+            defaultClaudeDisplayName: assembly.defaultClaudeDisplayName,
+            defaultClaudeCardID: assembly.defaultClaudeCardID
+        ).compactMap { $0 as? ClaudeProvider }
+        XCTAssertEqual(runtimes.first?.provider.id, "claude")
+        XCTAssertEqual(runtimes.first?.authStore.scope,
+                       .configDir(path: path, keychainLiteral: path))
+        XCTAssertEqual(runtimes.last?.provider.id, assembly.defaultClaudeCardID)
+        XCTAssertEqual(runtimes.last?.authStore.scope, .standard)
+    }
+
     func testNothingObservedLeavesRegistryAndKeysEmpty() {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)

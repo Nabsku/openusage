@@ -13,14 +13,18 @@ enum ProviderCatalog {
         defaults: UserDefaults = .standard,
         claudeCards: [ClaudeAccountCard] = [],
         defaultClaudeExtraLogRoots: [URL] = [],
-        defaultClaudeDisplayName: String? = nil
+        defaultClaudeDisplayName: String? = nil,
+        defaultClaudeCardID: String = "claude"
     ) -> [ProviderRuntime] {
         // Default provider order (see AGENTS.md "## Providers"): the three established providers first,
         // then every other provider alphabetically by display name. Account cards slot in right after
         // their family's default card.
         var runtimes: [ProviderRuntime] = []
         runtimes.append(ClaudeProvider(
-            provider: ClaudeProvider.makeProvider(displayName: defaultClaudeDisplayName ?? "Claude"),
+            provider: ClaudeProvider.makeProvider(
+                id: defaultClaudeCardID,
+                displayName: defaultClaudeDisplayName ?? "Claude"
+            ),
             // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
             // belongs to one of them — fetching that account's usage onto the default card. Desktop
             // returns as its own properly-pinned source kind in Phase 3.
@@ -30,6 +34,7 @@ enum ProviderCatalog {
         for card in claudeCards {
             runtimes.append(claudeAccountRuntime(card: card))
         }
+        runtimes.sort { $0.provider.id == "claude" && $1.provider.id != "claude" }
         runtimes += [
             CodexProvider(),
             CursorProvider(),

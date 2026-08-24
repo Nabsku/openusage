@@ -47,6 +47,8 @@ struct ProviderAccountAssembly {
     var defaultClaudeExtraLogRoots: [URL] = []
     /// The default Claude card's rename, when the badge-holder record carries one.
     var defaultClaudeDisplayName: String?
+    /// The default runtime follows its account record, even when another account keeps `claude`.
+    var defaultClaudeCardID = "claude"
 
     /// `waitsForLoginShell`: true for the menu-bar app (a Finder/Dock launch inherits no shell
     /// exports, so the pass leans on the login-shell layers), false for the one-shot CLI (a terminal
@@ -188,20 +190,17 @@ struct ProviderAccountAssembly {
         }
 
         let records = accountsStore.reconcile(with: observations)
+        let defaultClaudeRecord = accountsStore.defaultBadgeHolder(family: "claude")
+        if let defaultClaudeRecord, defaultClaudeRecord.id != "claude" {
+            identityKeys.removeValue(forKey: "claude")
+            identityKeys[defaultClaudeRecord.id] = defaultClaudeRecord.identityKey
+        }
 
         // The extra-card build plan: one card per distinct account found this launch, under its
         // reconciled record id.
         var claudeCards: [ClaudeAccountCard] = []
         for account in foundClaudeAccounts {
             guard let record = records.first(where: { $0.family == "claude" && $0.identityKey == account.identityKey }) else {
-                continue
-            }
-            guard record.id != "claude" else {
-                // The bare record's account has moved out of the default home into a config dir
-                // while another login occupies the default. The bare CARD is the default home's
-                // runtime, so this record can't render under its own id this launch. Proper swap
-                // support re-points this in Phase 4; until then the parked account stays hidden.
-                AppLog.warn(.config, "discovery: the claude record's account now lives in a config dir; its card is unavailable until swap support lands")
                 continue
             }
             guard let primary = account.dirs.first else { continue }
@@ -219,12 +218,17 @@ struct ProviderAccountAssembly {
         }
         claudeCards.sort { $0.id < $1.id }
 
-        let defaultClaudeRename = records.first { $0.id == "claude" }?.customLabel?.nilIfEmpty
+        let defaultClaudeName = defaultClaudeRecord.flatMap { record in
+            if let customLabel = record.customLabel?.nilIfEmpty { return customLabel }
+            guard record.id != "claude" else { return nil }
+            return ClaudeAccountCard.displayName(customLabel: nil, label: record.label, id: record.id)
+        }
         return ProviderAccountAssembly(
             identityKeysByCard: identityKeys,
             claudeCards: claudeCards,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
-            defaultClaudeDisplayName: defaultClaudeRename
+            defaultClaudeDisplayName: defaultClaudeName,
+            defaultClaudeCardID: defaultClaudeRecord?.id ?? "claude"
         )
     }
 }
