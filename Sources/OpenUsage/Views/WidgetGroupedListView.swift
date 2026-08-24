@@ -93,7 +93,8 @@ struct WidgetGroupedListView: View {
             // whose identity has been observed at least once.
             if container.canRename(group.provider.id) {
                 Button("Rename…") {
-                    renameDraft = name
+                    renameDraft = container.accounts.records
+                        .first { $0.id == group.provider.id }?.customLabel ?? ""
                     renameCardID = group.provider.id
                 }
             }
