@@ -138,10 +138,14 @@ struct ClaudeConfigDirDiscovery {
             recordReadFailure(error, candidate: url, result: &result)
             return nil
         }
-        guard let parsed = try? JSONDecoder().decode(
-                  DefaultAccountObserver.ClaudeStateFile.self, from: Data(identityText.utf8)
-              ),
-              let account = parsed.oauthAccount,
+        let parsed: DefaultAccountObserver.ClaudeStateFile
+        do {
+            parsed = try JSONDecoder().decode(DefaultAccountObserver.ClaudeStateFile.self, from: Data(identityText.utf8))
+        } catch {
+            recordReadFailure(error, candidate: url, result: &result)
+            return nil
+        }
+        guard let account = parsed.oauthAccount,
               let key = DefaultAccountObserver.claudeIdentityKey(account)
         else {
             result.notes.append("claude candidate \(logPath(url.path)): identity file present but names no account → skipped")
@@ -158,8 +162,12 @@ struct ClaudeConfigDirDiscovery {
             recordReadFailure(error, candidate: url, result: &result)
             return nil
         }
-        let fileBacked = credentialsText
-            .flatMap { ClaudeAuthStore.parseCredentials($0) }?
+        let parsedCredentials = credentialsText.flatMap(ClaudeAuthStore.parseCredentials)
+        if let credentialsText, !credentialsText.isEmpty, parsedCredentials == nil {
+            recordReadFailure(CocoaError(.fileReadCorruptFile), candidate: url, result: &result)
+            return nil
+        }
+        let fileBacked = parsedCredentials?
             .claudeAiOauth?.accessToken?.nilIfEmpty != nil
 
         var matchedLiteral: String?

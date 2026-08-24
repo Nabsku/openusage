@@ -149,5 +149,15 @@ final class ClaudeConfigDirDiscoveryTests: XCTestCase {
 
         XCTAssertTrue(result.truncated)
         XCTAssertTrue(result.findings.isEmpty)
+
+        for files in [
+            [path + "/.claude.json": "{"],
+            [path + "/.claude.json": #"{"oauthAccount":{"accountUuid":"work"}}"#,
+             path + "/.credentials.json": "{"],
+        ] {
+            var malformed = discovery
+            malformed.files = FakeFiles(files)
+            XCTAssertTrue(malformed.run().truncated)
+        }
     }
 }
