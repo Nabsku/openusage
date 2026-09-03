@@ -452,4 +452,12 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         XCTAssertEqual(total.totalTokens, 1_500_000)
         XCTAssertTrue(total.isEstimated)
     }
+
+    func testIsMissingStepsSchemaError() {
+        XCTAssertTrue(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("Parse error: no such table: steps")))
+        XCTAssertTrue(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("Error: no such column: s.metadata")))
+        XCTAssertFalse(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("Error: database is locked")))
+        XCTAssertFalse(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("timeout after 5 seconds")))
+        XCTAssertFalse(AntigravityDbUsageScanner.isMissingStepsSchemaError(CocoaError(.fileNoSuchFile)))
+    }
 }

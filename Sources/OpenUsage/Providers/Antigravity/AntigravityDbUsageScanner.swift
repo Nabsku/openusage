@@ -174,7 +174,7 @@ actor AntigravityDbUsageScanner {
             do {
                 payload = try sqlite.queryValue(path: path, sql: sql)
             } catch {
-                if !usesLegacySQL {
+                if !usesLegacySQL, Self.isMissingStepsSchemaError(error) {
                     usesLegacySQL = true
                     continue
                 }
@@ -207,6 +207,14 @@ actor AntigravityDbUsageScanner {
 
             if rows.count < Self.batchSize { break }
         }
+    }
+
+    static func isMissingStepsSchemaError(_ error: Error) -> Bool {
+        guard case SQLiteError.queryFailed(let stderr) = error else {
+            return false
+        }
+        let lower = stderr.lowercased()
+        return lower.contains("no such table") || lower.contains("no such column")
     }
 
     private struct Row: Decodable {
