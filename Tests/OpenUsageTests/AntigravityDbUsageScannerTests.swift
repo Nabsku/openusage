@@ -159,6 +159,28 @@ final class AntigravityProtoDecoderTests: XCTestCase {
         XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: overflowingSystemPrompt))
         XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: [0xff, 0xff, 0xff]))
     }
+
+    func testExtractsStepMetadataTimestamp() {
+        let wallClock = antigravityVarintField(1, 1_800_000_000)
+        let stepMeta = antigravityBytesField(1, wallClock)
+        XCTAssertEqual(AntigravityProtoDecoder.timestamp(fromStepMetadata: stepMeta), 1_800_000_000)
+        XCTAssertNil(AntigravityProtoDecoder.timestamp(fromStepMetadata: []))
+        XCTAssertNil(AntigravityProtoDecoder.timestamp(fromStepMetadata: [0xff]))
+    }
+
+    func testUsesFallbackTimestampWhenTimingBytesMissing() throws {
+        let blobWithoutTimestamp = antigravityGenerationBlob(
+            model: "gemini-3.8-flash",
+            input: 500,
+            output: 100,
+            timestamp: nil
+        )
+        let event = try XCTUnwrap(AntigravityProtoDecoder.generationEvent(from: blobWithoutTimestamp, fallbackTimestampSeconds: 1_800_000_123))
+        XCTAssertEqual(event.model, "gemini-3.8-flash")
+        XCTAssertEqual(event.inputTokens, 500)
+        XCTAssertEqual(event.outputTokens, 100)
+        XCTAssertEqual(event.timestampSeconds, 1_800_000_123)
+    }
 }
 
 final class AntigravityDbUsageScannerTests: XCTestCase {

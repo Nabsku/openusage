@@ -169,7 +169,12 @@ struct SQLiteCLIAccessor: SQLiteAccessing {
         // A normal sqlite3 open can create a missing database. Credential probes must be read-only and
         // side-effect free, so absence returns nil before a process is launched.
         guard try databaseExists(path) else { return nil }
-        let result = try run(path: path, sql: sql, readOnly: true)
+        var result = try run(path: path, sql: sql, readOnly: true)
+        // WAL-mode databases require shared memory (-shm) management and fail with
+        // 'unable to open database file (14)' under sqlite3's -readonly flag.
+        if !result.succeeded && result.stderr.contains("unable to open database file") {
+            result = try run(path: path, sql: sql, readOnly: false)
+        }
         guard result.succeeded else {
             throw SQLiteError.queryFailed(result.stderr)
         }

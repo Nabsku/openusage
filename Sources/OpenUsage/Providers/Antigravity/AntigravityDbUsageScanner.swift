@@ -108,7 +108,24 @@ actor AntigravityDbUsageScanner {
 
     /// `CASE` prevents SQLite from expanding oversized blobs, while the inner `LIMIT` bounds the
     /// maximum hex payload returned by any subprocess to roughly `batchSize * maximumBlobBytes * 2`.
+    /// Modern Antigravity conversation DBs omit timestamps from `gen_metadata.data` and record them
+    /// in `steps.metadata`, which is correlated by `idx`.
     static func dataSQL(after index: Int) -> String {
+        """
+        SELECT json_group_array(json_object('index', g.idx, 'hex',
+            CASE WHEN length(g.data) <= \(maximumBlobBytes) THEN hex(g.data) ELSE NULL END,
+            'step_hex', (SELECT CASE WHEN length(metadata) <= \(maximumBlobBytes) THEN hex(metadata) ELSE NULL END FROM steps WHERE idx = g.idx)))
+        FROM (
+            SELECT idx, data FROM gen_metadata
+            WHERE idx > \(index) AND data IS NOT NULL
+            ORDER BY idx
+            LIMIT \(batchSize)
+        ) g
+        """
+    }
+
+    /// Fallback query if `steps` table does not exist in an older or external database.
+    static func legacyDataSQL(after index: Int) -> String {
         """
         SELECT json_group_array(json_object('index', idx, 'hex',
             CASE WHEN length(data) <= \(maximumBlobBytes) THEN hex(data) ELSE NULL END))
@@ -150,8 +167,20 @@ actor AntigravityDbUsageScanner {
     }
 
     private func readDatabase(path: String, since: Date, into cached: inout CachedDatabase) throws {
+        var usesLegacySQL = false
         while !Task.isCancelled {
-            guard let payload = try sqlite.queryValue(path: path, sql: Self.dataSQL(after: cached.lastIndex)) else { break }
+            let sql = usesLegacySQL ? Self.legacyDataSQL(after: cached.lastIndex) : Self.dataSQL(after: cached.lastIndex)
+            let payload: String?
+            do {
+                payload = try sqlite.queryValue(path: path, sql: sql)
+            } catch {
+                if !usesLegacySQL {
+                    usesLegacySQL = true
+                    continue
+                }
+                throw error
+            }
+            guard let payload else { break }
             let rows = try JSONDecoder().decode([Row].self, from: Data(payload.utf8))
             guard !rows.isEmpty else { break }
 
@@ -165,8 +194,12 @@ actor AntigravityDbUsageScanner {
                     cached.sawOversizedBlob = true
                     continue
                 }
+
+                let stepTimestamp = row.stepHex.flatMap(Self.bytes(fromHex:)).flatMap(AntigravityProtoDecoder.timestamp(fromStepMetadata:))
+                let fallbackTimestamp = stepTimestamp ?? Int64(cached.fingerprint.latestModification.timeIntervalSince1970)
+
                 guard let blob = Self.bytes(fromHex: hex),
-                      let event = AntigravityProtoDecoder.generationEvent(from: blob),
+                      let event = AntigravityProtoDecoder.generationEvent(from: blob, fallbackTimestampSeconds: fallbackTimestamp),
                       Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds)) >= since
                 else { continue }
                 cached.events.append(event)
@@ -179,6 +212,13 @@ actor AntigravityDbUsageScanner {
     private struct Row: Decodable {
         let index: Int
         let hex: String?
+        let stepHex: String?
+
+        enum CodingKeys: String, CodingKey {
+            case index
+            case hex
+            case stepHex = "step_hex"
+        }
     }
 
     private static func accumulate(

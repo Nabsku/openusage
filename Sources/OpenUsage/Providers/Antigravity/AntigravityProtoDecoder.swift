@@ -84,9 +84,21 @@ enum AntigravityProtoDecoder {
         return value
     }
 
-    /// `gen_metadata.data` wraps its event in field 1: model 19, token counts 4, and timestamp 9.
+    /// Decodes a step timestamp from `steps.metadata` (field 1 is a google.protobuf.Timestamp message with field 1 = seconds).
+    static func timestamp(fromStepMetadata stepMetadata: [UInt8]) -> Int64? {
+        guard let timestampBytes = bytesField(1, in: stepMetadata),
+              let seconds = varintField(1, in: timestampBytes),
+              let timestampSeconds = Int64(exactly: seconds), timestampSeconds > 0
+        else { return nil }
+        return timestampSeconds
+    }
+
+    /// `gen_metadata.data` wraps its event in field 1: model 19, token counts 4, and optional timestamp 9.
     /// An absent model remains visibly unpriced instead of silently borrowing another Gemini rate.
-    static func generationEvent(from blob: [UInt8]) -> GenerationEvent? {
+    static func generationEvent(
+        from blob: [UInt8],
+        fallbackTimestampSeconds: Int64? = nil
+    ) -> GenerationEvent? {
         guard let wrapped = bytesField(1, in: blob) else { return nil }
 
         let decodedModel = bytesField(19, in: wrapped).flatMap { String(bytes: $0, encoding: .utf8) }
@@ -102,19 +114,29 @@ enum AntigravityProtoDecoder {
 
         let billableInputTokens = systemPromptTokens.addingReportingOverflow(inputTokens)
         guard !billableInputTokens.overflow,
-              billableInputTokens.partialValue != 0 || outputTokens != 0 || cacheReadTokens != 0,
-              let timingBytes = bytesField(9, in: wrapped),
-              let wallClockBytes = bytesField(4, in: timingBytes),
-              let timestamp = varintField(1, in: wallClockBytes),
-              let timestampSeconds = Int64(exactly: timestamp), timestampSeconds > 0
+              billableInputTokens.partialValue != 0 || outputTokens != 0 || cacheReadTokens != 0
         else { return nil }
+
+        let timestampSeconds: Int64?
+        if let timingBytes = bytesField(9, in: wrapped),
+           let wallClockBytes = bytesField(4, in: timingBytes),
+           let timestamp = varintField(1, in: wallClockBytes),
+           let parsed = Int64(exactly: timestamp), parsed > 0 {
+            timestampSeconds = parsed
+        } else if let fallback = fallbackTimestampSeconds, fallback > 0 {
+            timestampSeconds = fallback
+        } else {
+            timestampSeconds = nil
+        }
+
+        guard let validTimestamp = timestampSeconds else { return nil }
 
         return GenerationEvent(
             model: model.flatMap { $0.isEmpty ? nil : $0 } ?? GenerationEvent.unknownModel,
             inputTokens: billableInputTokens.partialValue,
             outputTokens: outputTokens,
             cacheReadTokens: cacheReadTokens,
-            timestampSeconds: timestampSeconds
+            timestampSeconds: validTimestamp
         )
     }
 }
