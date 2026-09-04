@@ -36,13 +36,22 @@ actor AntigravityDbUsageScanner {
         )
     }
 
-    /// Each Antigravity surface keeps its own conversation store under `~/.gemini`: the `agy` CLI,
-    /// the Antigravity IDE, the Antigravity 2.0 app, and ACP-hosted sessions.
     static let defaultConversationsDirectories: @Sendable () -> [String] = {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return ["antigravity-cli", "antigravity", "antigravity-ide", "antigravity-acp"].map {
-            home.appendingPathComponent(".gemini/\($0)/conversations").path
-        }
+        conversationsDirectories(
+            underGeminiHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini").path
+        )
+    }
+
+    /// Each Antigravity surface keeps its own store under `~/.gemini/antigravity*/conversations`: the
+    /// `agy` CLI, the IDE, the Antigravity 2.0 app, and ACP-hosted sessions. Discovering them by name
+    /// means a new surface is picked up without a release.
+    static func conversationsDirectories(underGeminiHome geminiHome: String) -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: geminiHome)) ?? []
+        return names
+            .filter { $0.hasPrefix("antigravity") }
+            .sorted()
+            .map { geminiHome.trimmingTrailingSlashes + "/" + $0 + "/conversations" }
+            .filter { FileManager.default.fileExists(atPath: $0) }
     }
 
     func scan(daysBack: Int = 30, now: Date = Date(), pricing: ModelPricing) async -> LogUsageScan? {
@@ -221,20 +230,28 @@ actor AntigravityDbUsageScanner {
             output: event.outputTokens
         )
 
-        let model = Self.breakdownModel(event.model)
-        guard let cost = pricing.estimatedCostDollars(model: model, tokens: tokens) else {
-            accumulator.addUnknownModel(day: day, model: model)
-            return
+        let candidates = Self.modelCandidates(id: event.modelID, label: event.label)
+        for model in candidates {
+            if let cost = pricing.estimatedCostDollars(model: model, tokens: tokens) {
+                accumulator.add(day: day, tokens: total.partialValue, cost: cost, model: model)
+                return
+            }
         }
-        accumulator.add(day: day, tokens: total.partialValue, cost: cost, model: model)
+        accumulator.addUnknownModel(
+            day: day, model: candidates.first ?? AntigravityProtoDecoder.GenerationEvent.unknownModel
+        )
     }
 
-    /// Antigravity resolves subagent tiers (`flash_lite`, `flash`, `pro`) through a server-sent
-    /// `TieredModelConfig`, and logs the resolved ID with a `-tiered` suffix
-    /// (`gemini-3.7-flash-tiered`). It is the same model at the same price, so the breakdown
-    /// shows it under the base name.
-    static func breakdownModel(_ model: String) -> String {
-        model.hasSuffix("-tiered") ? String(model.dropLast("-tiered".count)) : model
+    /// Names to price by, in order of preference. Antigravity logs `gemini-default` /
+    /// `gemini-pro-default` as the ID when the picker is on its default choice and records the model
+    /// that served the turn as the label, so placeholders prefer the label and fall back to the ID.
+    /// Subagent tiers (`flash_lite`, `flash`, `pro`) resolve through a server-sent `TieredModelConfig`
+    /// and log the result with a `-tiered` suffix; that is the same model at the same rate, so it is
+    /// shown under the base name.
+    static func modelCandidates(id: String?, label: String?) -> [String] {
+        let id = id.map { $0.hasSuffix("-tiered") ? String($0.dropLast("-tiered".count)) : $0 }
+        let isPlaceholder = id?.hasSuffix("-default") ?? false
+        return (isPlaceholder ? [label, id] : [id, label]).compactMap { $0 }
     }
 
     static func bytes(fromHex hex: String) -> [UInt8]? {

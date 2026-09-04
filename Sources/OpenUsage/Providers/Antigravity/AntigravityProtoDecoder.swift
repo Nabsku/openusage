@@ -11,7 +11,11 @@ enum AntigravityProtoDecoder {
     struct GenerationEvent: Equatable, Sendable {
         static let unknownModel = "Unknown Antigravity Model"
 
-        var model: String
+        /// Field 19, Antigravity's internal model ID (`gemini-3.7-flash-high`, or a placeholder such as
+        /// `gemini-pro-default` when the picker is on its default choice).
+        var modelID: String?
+        /// Field 21, the product label for the model that served the turn ("Gemini 3.1 Pro (High)").
+        var label: String?
         var inputTokens: Int
         var outputTokens: Int
         var cacheReadTokens: Int
@@ -98,34 +102,24 @@ enum AntigravityProtoDecoder {
     }
 
     private static func trimmedString(_ number: UInt32, in message: [UInt8]) -> String? {
-        guard let value = bytesField(number, in: message).flatMap({ String(bytes: $0, encoding: .utf8) }) else {
-            return nil
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    /// Antigravity writes `gemini-default` / `gemini-pro-default` to field 19 when the picker is on
-    /// its default choice; the model that actually served the turn is the display label in field 21.
-    static func resolvedModel(internalID: String?, label: String?) -> String? {
-        guard let internalID, !internalID.hasSuffix("-default") else { return label ?? internalID }
-        return internalID
+        bytesField(number, in: message)
+            .flatMap { String(bytes: $0, encoding: .utf8) }?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
     }
 
     /// `gen_metadata.data` wraps its event in field 1: internal model ID 19, display label 21, token
-    /// counts 4, and optional timing 9 (whose field 4 is a Timestamp message). Placeholder IDs resolve
-    /// through the label; an absent model remains visibly unpriced instead of silently borrowing another
-    /// Gemini rate. Rows with neither ID nor label that carry only a system-prompt count are bookkeeping
-    /// (prompt-context records), not generations, and produce no event. `stepMetadata` is the
-    /// correlated `steps.metadata` blob, consulted only when the embedded timing is missing; it is the
-    /// sole fallback because file modification times move on every write. With neither timestamp the
-    /// event is dropped rather than assigned to a day.
+    /// counts 4, and optional timing 9 (whose field 4 is a Timestamp message). Which name to price by is
+    /// the scanner's call; the decoder only extracts. Rows with neither ID nor label that carry only a
+    /// system-prompt count are bookkeeping (prompt-context records), not generations, and produce no
+    /// event. `stepMetadata` is the correlated `steps.metadata` blob, consulted only when the embedded
+    /// timing is missing; it is the sole fallback because file modification times move on every write.
+    /// With neither timestamp the event is dropped rather than assigned to a day.
     static func generationEvent(from blob: [UInt8], stepMetadata: [UInt8]? = nil) -> GenerationEvent? {
         guard let wrapped = bytesField(1, in: blob) else { return nil }
 
-        let internalID = trimmedString(19, in: wrapped)
+        let modelID = trimmedString(19, in: wrapped)
         let label = trimmedString(21, in: wrapped)
-        let model = resolvedModel(internalID: internalID, label: label)
 
         guard let usage = bytesField(4, in: wrapped) else { return nil }
 
@@ -135,12 +129,11 @@ enum AntigravityProtoDecoder {
               let cacheReadTokens = Int(exactly: varintField(5, in: usage) ?? 0)
         else { return nil }
 
-        let generated = inputTokens != 0 || outputTokens != 0 || cacheReadTokens != 0
-        guard model != nil || generated else { return nil }
-
         let billableInputTokens = systemPromptTokens.addingReportingOverflow(inputTokens)
+        let generated = inputTokens != 0 || outputTokens != 0 || cacheReadTokens != 0
         guard !billableInputTokens.overflow,
-              billableInputTokens.partialValue != 0 || outputTokens != 0 || cacheReadTokens != 0
+              modelID != nil || label != nil || generated,
+              generated || billableInputTokens.partialValue != 0
         else { return nil }
 
         let embeddedTimestamp = bytesField(9, in: wrapped)
@@ -150,7 +143,8 @@ enum AntigravityProtoDecoder {
         else { return nil }
 
         return GenerationEvent(
-            model: model ?? GenerationEvent.unknownModel,
+            modelID: modelID,
+            label: label,
             inputTokens: billableInputTokens.partialValue,
             outputTokens: outputTokens,
             cacheReadTokens: cacheReadTokens,

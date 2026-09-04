@@ -149,7 +149,8 @@ final class AntigravityProtoDecoderTests: XCTestCase {
         )
         let event = try XCTUnwrap(AntigravityProtoDecoder.generationEvent(from: blob))
 
-        XCTAssertEqual(event.model, "gemini-3.1-pro-low")
+        XCTAssertEqual(event.modelID, "gemini-3.1-pro-low")
+        XCTAssertNil(event.label)
         XCTAssertEqual(event.inputTokens, 2_132)
         XCTAssertEqual(event.outputTokens, 200)
         XCTAssertEqual(event.cacheReadTokens, 50)
@@ -172,19 +173,23 @@ final class AntigravityProtoDecoderTests: XCTestCase {
         XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: [0xff, 0xff, 0xff]))
     }
 
-    func testPlaceholderModelsResolveThroughTheDisplayLabel() throws {
-        func model(_ id: String?, label: String?) -> String? {
-            AntigravityProtoDecoder.generationEvent(
-                from: antigravityGenerationBlob(model: id, input: 10, output: 1, label: label, timestamp: 1_800_000_000)
-            )?.model
-        }
+    func testDecoderExposesModelIDAndLabelWithoutChoosing() throws {
+        let blob = antigravityGenerationBlob(
+            model: "gemini-pro-default", input: 10, output: 1, label: " Gemini 3.1 Pro (High) ", timestamp: 1_800_000_000
+        )
+        let event = try XCTUnwrap(AntigravityProtoDecoder.generationEvent(from: blob))
+        XCTAssertEqual(event.modelID, "gemini-pro-default")
+        XCTAssertEqual(event.label, "Gemini 3.1 Pro (High)")
+    }
 
-        XCTAssertEqual(model("gemini-default", label: "Gemini 3.5 Flash (Low)"), "Gemini 3.5 Flash (Low)")
-        XCTAssertEqual(model("gemini-pro-default", label: "Gemini 3.1 Pro (High)"), "Gemini 3.1 Pro (High)")
-        XCTAssertEqual(model("gemini-pro-default", label: nil), "gemini-pro-default")
-        XCTAssertEqual(model(nil, label: "Claude Opus 4.6 (Thinking)"), "Claude Opus 4.6 (Thinking)")
-        XCTAssertEqual(model("gemini-3.7-flash-high", label: "Gemini 3.7 Flash (High)"), "gemini-3.7-flash-high")
-        XCTAssertEqual(model(nil, label: nil), AntigravityProtoDecoder.GenerationEvent.unknownModel)
+    func testModelCandidatesPreferLabelsForPlaceholdersAndFoldTieredIDs() {
+        typealias Scanner = AntigravityDbUsageScanner
+        XCTAssertEqual(Scanner.modelCandidates(id: "gemini-default", label: "Gemini 3.5 Flash (Low)"), ["Gemini 3.5 Flash (Low)", "gemini-default"])
+        XCTAssertEqual(Scanner.modelCandidates(id: "gemini-pro-default", label: nil), ["gemini-pro-default"])
+        XCTAssertEqual(Scanner.modelCandidates(id: nil, label: "Claude Opus 4.6 (Thinking)"), ["Claude Opus 4.6 (Thinking)"])
+        XCTAssertEqual(Scanner.modelCandidates(id: "gemini-3.7-flash-high", label: "Gemini 3.7 Flash (High)"), ["gemini-3.7-flash-high", "Gemini 3.7 Flash (High)"])
+        XCTAssertEqual(Scanner.modelCandidates(id: "gemini-3.7-flash-tiered", label: nil), ["gemini-3.7-flash"])
+        XCTAssertEqual(Scanner.modelCandidates(id: nil, label: nil), [])
     }
 
     func testSystemPromptOnlyRowsWithoutAnyModelAreBookkeepingNotGenerations() {
@@ -216,7 +221,7 @@ final class AntigravityProtoDecoderTests: XCTestCase {
         let event = try XCTUnwrap(AntigravityProtoDecoder.generationEvent(
             from: blobWithoutTimestamp, stepMetadata: antigravityStepMetadata(timestamp: 1_800_000_123)
         ))
-        XCTAssertEqual(event.model, "gemini-3.8-flash")
+        XCTAssertEqual(event.modelID, "gemini-3.8-flash")
         XCTAssertEqual(event.inputTokens, 500)
         XCTAssertEqual(event.outputTokens, 100)
         XCTAssertEqual(event.timestampSeconds, 1_800_000_123)
@@ -259,6 +264,38 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
 
         let result = await scanner.scan(now: now, pricing: pricing)
         XCTAssertNil(result)
+    }
+
+    func testPlaceholderFallsBackToThePricedIDWhenTheLabelIsUnpriced() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(
+                model: "gemini-pro-default", input: 10, output: 5, label: "Gemini 9 Mystery (High)", timestamp: timestamp
+            )),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
+        let scan = try XCTUnwrap(result)
+        XCTAssertTrue(scan.unknownModelsByDay.isEmpty)
+        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["gemini-pro-default"])
+    }
+
+    func testDiscoversAntigravityConversationStoresUnderGeminiHome() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        for path in ["antigravity-cli/conversations", "antigravity-ide", "tmp/conversations", "antigravity/conversations"] {
+            try FileManager.default.createDirectory(
+                at: home.appendingPathComponent(path), withIntermediateDirectories: true
+            )
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+
+        XCTAssertEqual(
+            AntigravityDbUsageScanner.conversationsDirectories(underGeminiHome: home.path),
+            [home.path + "/antigravity/conversations", home.path + "/antigravity-cli/conversations"]
+        )
+        XCTAssertEqual(AntigravityDbUsageScanner.conversationsDirectories(underGeminiHome: "/nonexistent-\(UUID().uuidString)"), [])
     }
 
     func testBookkeepingRowsDoNotRaiseTheUnknownModelWarning() async throws {

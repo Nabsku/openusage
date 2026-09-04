@@ -170,10 +170,10 @@ struct SQLiteCLIAccessor: SQLiteAccessing {
         // side-effect free, so absence returns nil before a process is launched.
         guard try databaseExists(path) else { return nil }
         var result = try run(path: path, sql: sql, mode: .readOnly)
-        // A WAL-mode database whose -shm file cannot be opened read-only fails with
-        // 'unable to open database file (14)' under -readonly. Retry with a connection that may set up
-        // the WAL sidecars but is still refused any write by `PRAGMA query_only`.
-        if !result.succeeded, result.stderr.contains("unable to open database file") {
+        // A WAL-mode database whose -shm file cannot be opened read-only fails to open under
+        // -readonly. Retry with a connection that may set up the WAL sidecars but is still refused any
+        // write by `PRAGMA query_only`; a genuine error fails the same way again.
+        if !result.succeeded {
             result = try run(path: path, sql: sql, mode: .queryOnly)
         }
         guard result.succeeded else {
