@@ -37,6 +37,7 @@ private func antigravityGenerationBlob(
     output: UInt64,
     cacheRead: UInt64 = 0,
     systemPrompt: UInt64 = 0,
+    label: String? = nil,
     timestamp: UInt64?
 ) -> [UInt8] {
     let usage = antigravityVarintField(1, systemPrompt)
@@ -49,6 +50,9 @@ private func antigravityGenerationBlob(
         event += antigravityBytesField(19, Array(model.utf8))
     }
     event += antigravityBytesField(4, usage)
+    if let label {
+        event += antigravityBytesField(21, Array(label.utf8))
+    }
 
     if let timestamp {
         let wallClock = antigravityVarintField(1, timestamp)
@@ -168,6 +172,33 @@ final class AntigravityProtoDecoderTests: XCTestCase {
         XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: [0xff, 0xff, 0xff]))
     }
 
+    func testPlaceholderModelsResolveThroughTheDisplayLabel() throws {
+        func model(_ id: String?, label: String?) -> String? {
+            AntigravityProtoDecoder.generationEvent(
+                from: antigravityGenerationBlob(model: id, input: 10, output: 1, label: label, timestamp: 1_800_000_000)
+            )?.model
+        }
+
+        XCTAssertEqual(model("gemini-default", label: "Gemini 3.5 Flash (Low)"), "Gemini 3.5 Flash (Low)")
+        XCTAssertEqual(model("gemini-pro-default", label: "Gemini 3.1 Pro (High)"), "Gemini 3.1 Pro (High)")
+        XCTAssertEqual(model("gemini-pro-default", label: nil), "gemini-pro-default")
+        XCTAssertEqual(model(nil, label: "Claude Opus 4.6 (Thinking)"), "Claude Opus 4.6 (Thinking)")
+        XCTAssertEqual(model("gemini-3.7-flash-high", label: "Gemini 3.7 Flash (High)"), "gemini-3.7-flash-high")
+        XCTAssertEqual(model(nil, label: nil), AntigravityProtoDecoder.GenerationEvent.unknownModel)
+    }
+
+    func testSystemPromptOnlyRowsWithoutAnyModelAreBookkeepingNotGenerations() {
+        let bookkeeping = antigravityGenerationBlob(model: nil, input: 0, output: 0, systemPrompt: 1_298, timestamp: 1_800_000_000)
+        let labelled = antigravityGenerationBlob(
+            model: nil, input: 0, output: 0, systemPrompt: 1_298, label: "Gemini 3.1 Pro (Low)", timestamp: 1_800_000_000
+        )
+        let named = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 0, output: 0, systemPrompt: 1_298, timestamp: 1_800_000_000)
+
+        XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: bookkeeping))
+        XCTAssertEqual(AntigravityProtoDecoder.generationEvent(from: labelled)?.inputTokens, 1_298)
+        XCTAssertEqual(AntigravityProtoDecoder.generationEvent(from: named)?.inputTokens, 1_298)
+    }
+
     func testExtractsStepMetadataTimestamp() {
         let stepMeta = antigravityStepMetadata(timestamp: 1_800_000_000)
         XCTAssertEqual(AntigravityProtoDecoder.timestamp(fromStepMetadata: stepMeta), 1_800_000_000)
@@ -228,6 +259,25 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
 
         let result = await scanner.scan(now: now, pricing: pricing)
         XCTAssertNil(result)
+    }
+
+    func testBookkeepingRowsDoNotRaiseTheUnknownModelWarning() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(model: nil, input: 0, output: 0, systemPrompt: 1_036, timestamp: timestamp)),
+            .init(index: 1, blob: antigravityGenerationBlob(
+                model: "gemini-default", input: 10, output: 5, label: "Gemini 3.6 Flash (High)", timestamp: timestamp
+            )),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        // The bundled supplement carries the display-label alias rules under test.
+        let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
+        let scan = try XCTUnwrap(result)
+        XCTAssertTrue(scan.unknownModelsByDay.isEmpty)
+        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["Gemini 3.6 Flash (High)"])
+        XCTAssertEqual(scan.series.daily.first?.totalTokens, 15)
     }
 
     func testTieredSubagentModelsFoldIntoTheBaseModelRow() async throws {

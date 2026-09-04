@@ -36,6 +36,30 @@ final class ModelPricingTests: XCTestCase {
 
     // MARK: - Resolution
 
+    func testAntigravityDisplayLabelsAndPlaceholderIDsResolveToCatalogModels() {
+        let pricing = TestPricing.bundled
+        let expectations = [
+            ("Gemini 3.1 Pro (High)", "gemini-3.1-pro-preview"),
+            ("Gemini 3.1 Pro (Low)", "gemini-3.1-pro-preview"),
+            ("gemini-pro-default", "gemini-3.1-pro-preview"),
+            ("gemini-pro-agent", "gemini-3.1-pro-preview"),
+            ("Gemini 3.5 Flash (Low)", "gemini-3.5-flash"),
+            ("Gemini 3.5 Flash (Medium)", "gemini-3.5-flash"),
+            ("Gemini 3.6 Flash (High)", "gemini-3.6-flash"),
+            ("Gemini 3.7 Flash (High)", "gemini-3.7-flash"),
+            ("Gemini 3.8 Flash (Auto Balanced)", "gemini-3.8-flash"),
+            ("Claude Opus 4.6 (Thinking)", "claude-opus-4-6"),
+            ("Claude Sonnet 4.6 (Thinking)", "claude-sonnet-4-6"),
+        ]
+        for (label, canonical) in expectations {
+            XCTAssertEqual(pricing.supplement.canonicalName(for: label), canonical, label)
+            XCTAssertNotNil(pricing.resolve(model: label), label)
+        }
+        for unaliased in ["gemini-default", "Gemini 3.1 Pro (Turbo)", "gemini-pro-agent-fast"] {
+            XCTAssertNil(pricing.supplement.canonicalName(for: unaliased), unaliased)
+        }
+    }
+
     func testGemini38FlashEffortAndRouterAliasesUseBundledAPIRates() throws {
         let pricing = TestPricing.bundled
         let expected = rates(0.75, 3.75, cacheWrite: 0.75, cacheRead: 0.075)
@@ -43,7 +67,7 @@ final class ModelPricingTests: XCTestCase {
         let variants = [
             canonical, "gemini-3.8-flash-preview",
             "gemini-3.8-flash-none", "gemini-3.8-flash-low", "gemini-3.8-flash-medium",
-            "gemini-3.8-flash-high", "gemini-3.8-flash-xhigh", "gemini-3.8-flash-tiered",
+            "gemini-3.8-flash-high", "gemini-3.8-flash-xhigh", "gemini-3.8-flash-tiered", "gemini-3.8-flash-exp-a", "gemini-3.8-flash-exp-b-high",
             "gemini-3.8-flash-preview-high", "gemini-3.8-flash-xhigh-preview",
             "Gemini 3.8 Flash (Auto)", "Gemini 3.8 Flash (Auto Balanced)",
             "Gemini 3.8 Flash (Auto Cost)", "Gemini 3.8 Flash (Auto Intelligence)"
