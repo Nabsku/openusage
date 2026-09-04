@@ -10,14 +10,14 @@ actor AntigravityDbUsageScanner {
     static let batchSize = 8
 
     private let sqlite: SQLiteAccessing
-    private let conversationsDirectories: @Sendable () -> [String]
+    private let conversationsDirectories: @Sendable () throws -> [String]
     private let readFailureReporter: UsageLogReadFailureReporter
     private let oversizedBlobReporter: UsageLogReadFailureReporter
     private var scanCache: [String: CachedDatabase] = [:]
 
     init(
         sqlite: SQLiteAccessing = SQLiteCLIAccessor(),
-        conversationsDirectories: @escaping @Sendable () -> [String] = AntigravityDbUsageScanner.defaultConversationsDirectories,
+        conversationsDirectories: @escaping @Sendable () throws -> [String] = AntigravityDbUsageScanner.defaultConversationsDirectories,
         readFailureWarning: UsageLogReadFailureReporter.Warning? = nil,
         oversizedBlobWarning: UsageLogReadFailureReporter.Warning? = nil
     ) {
@@ -36,17 +36,27 @@ actor AntigravityDbUsageScanner {
         )
     }
 
-    static let defaultConversationsDirectories: @Sendable () -> [String] = {
-        conversationsDirectories(
-            underGeminiHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini").path
-        )
+    static let defaultConversationsDirectories: @Sendable () throws -> [String] = {
+        try conversationsDirectories(underGeminiHome: geminiHome)
+    }
+
+    static var geminiHome: String {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini").path
     }
 
     /// Each Antigravity surface keeps its own store under `~/.gemini/antigravity*/conversations`: the
     /// `agy` CLI, the IDE, the Antigravity 2.0 app, and ACP-hosted sessions. Discovering them by name
     /// means a new surface is picked up without a release.
-    static func conversationsDirectories(underGeminiHome geminiHome: String) -> [String] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: geminiHome)) ?? []
+    /// A missing `~/.gemini` means Antigravity was never installed and yields no stores; any other
+    /// listing failure (a permission problem, an I/O error) is surfaced instead of read as "no usage".
+    static func conversationsDirectories(underGeminiHome geminiHome: String) throws -> [String] {
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: geminiHome)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return []
+        }
+
         return names
             .filter { $0.hasPrefix("antigravity") }
             .sorted()
@@ -55,9 +65,15 @@ actor AntigravityDbUsageScanner {
     }
 
     func scan(daysBack: Int = 30, now: Date = Date(), pricing: ModelPricing) async -> LogUsageScan? {
-        let directories = conversationsDirectories().map(expandHome)
-        var paths: [String] = []
         var failingPaths: [String: String] = [:]
+        var directories: [String] = []
+        do {
+            directories = Self.deduplicated(try conversationsDirectories().map(expandHome))
+        } catch {
+            failingPaths[Self.geminiHome] = error.localizedDescription
+        }
+
+        var paths: [String] = []
         for directory in directories {
             do {
                 paths += try Self.databaseFiles(in: directory)
@@ -65,9 +81,11 @@ actor AntigravityDbUsageScanner {
                 failingPaths[directory] = error.localizedDescription
             }
         }
+        paths = Self.deduplicated(paths)
 
         let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
-        let checkedPaths = Set(paths).union(directories)
+        // The home listing is checked every scan, so a remembered listing failure clears once it recovers.
+        let checkedPaths = Set(paths).union(directories).union([Self.geminiHome])
         scanCache = scanCache.filter {
             checkedPaths.contains($0.key) && $0.value.fingerprint.latestModification >= since
         }
@@ -132,7 +150,9 @@ actor AntigravityDbUsageScanner {
         """
     }
 
-    static let stepsTableProbeSQL = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'steps'"
+    /// Probes the column, not just the table: a `steps` table without `metadata` would make every
+    /// data query fail with "no such column" and strand the whole database as unreadable.
+    static let stepMetadataProbeSQL = "SELECT 1 FROM pragma_table_info('steps') WHERE name = 'metadata'"
 
     private func cachedDatabase(path: String, since: Date) throws -> CachedDatabase? {
         let fingerprint = try DatabaseFingerprint(path: path)
@@ -163,10 +183,18 @@ actor AntigravityDbUsageScanner {
     }
 
     private func readDatabase(path: String, since: Date, into cached: inout CachedDatabase) throws {
-        if cached.hasStepsTable == nil {
-            cached.hasStepsTable = try sqlite.queryValue(path: path, sql: Self.stepsTableProbeSQL) != nil
+        // A database that lacks step timestamps is re-probed whenever it changes, so a store that gains
+        // them later is not read with the legacy query until the app restarts. Rows already dropped for
+        // having no timestamp are re-read, since they can now be dated.
+        if cached.hasStepMetadata != true {
+            let hasStepMetadata = try sqlite.queryValue(path: path, sql: Self.stepMetadataProbeSQL) != nil
+            if hasStepMetadata, cached.hasStepMetadata == false {
+                cached.lastIndex = -1
+                cached.events.removeAll()
+            }
+            cached.hasStepMetadata = hasStepMetadata
         }
-        let includeSteps = cached.hasStepsTable ?? false
+        let includeSteps = cached.hasStepMetadata ?? false
 
         while !Task.isCancelled {
             let sql = Self.dataSQL(after: cached.lastIndex, includeSteps: includeSteps)
@@ -282,6 +310,13 @@ actor AntigravityDbUsageScanner {
         return bytes
     }
 
+    /// Symlinked or repeated stores (`~/.gemini/antigravity-2 -> antigravity`) resolve to the same
+    /// files; scanning both would count the same conversations twice.
+    private static func deduplicated(_ paths: [String]) -> [String] {
+        var seen: Set<String> = []
+        return paths.filter { seen.insert(URL(fileURLWithPath: $0).resolvingSymlinksInPath().path).inserted }
+    }
+
     private static func databaseFiles(in directory: String) throws -> [String] {
         let names: [String]
         do {
@@ -330,7 +365,7 @@ actor AntigravityDbUsageScanner {
         var lastIndex = -1
         var events: [AntigravityProtoDecoder.GenerationEvent] = []
         var sawOversizedBlob = false
-        /// Probed once per database; nil until the first read.
-        var hasStepsTable: Bool?
+        /// Whether `steps.metadata` exists; nil until the first probe, and re-probed while false.
+        var hasStepMetadata: Bool?
     }
 }
