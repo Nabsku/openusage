@@ -28,7 +28,7 @@ enum CodexUsagePricing {
     /// its unscaled base rates so the Codex multiplier applies once; if a fast-only model has no base
     /// entry, its already-scaled rate is retained and no second multiplier is applied.
     static func resolveRates(pricing: ModelPricing, model: String) -> RateResolution {
-        let canonicalModel = pricing.supplement.canonicalName(for: model) ?? model
+        let canonicalModel = pricing.canonicalName(for: model)
         let isFastAlias = canonicalModel.hasSuffix("-fast")
         let rateModel = isFastAlias ? String(canonicalModel.dropLast("-fast".count)) : canonicalModel
         let baseRates = pricing.resolve(model: rateModel)

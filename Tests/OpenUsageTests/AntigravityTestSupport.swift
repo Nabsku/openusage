@@ -1,6 +1,42 @@
 import XCTest
 @testable import OpenUsage
 
+let antigravityNow = OpenUsageISO8601.date(from: "2026-07-27T12:00:00.000Z")!
+
+/// One priced Gemini model, so scanner tests that do not exercise alias rules stay independent of
+/// the bundled supplement.
+let antigravityPricing = ModelPricing(
+    supplement: PricingSupplement(),
+    primary: PricingCatalog(entries: [
+        "gemini-3.6-flash": ModelRates(
+            inputPerMillion: 1,
+            outputPerMillion: 4,
+            cacheWritePerMillion: 1,
+            cacheReadPerMillion: 0.25
+        )
+    ]),
+    secondary: PricingCatalog()
+)
+
+/// A temporary conversations directory holding empty database files, removed when `testCase` tears
+/// down. An empty file is a valid empty SQLite database, so real-`sqlite3` tests can create their
+/// own schema in it.
+func makeAntigravityDatabaseDirectory(
+    for testCase: XCTestCase,
+    fileNames: [String] = ["conversation.db"]
+) throws -> (url: URL, paths: [String]) {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+    let paths = try fileNames.map { name -> String in
+        let url = directory.appendingPathComponent(name)
+        try Data().write(to: url)
+        return url.path
+    }
+    testCase.addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+    return (directory, paths)
+}
+
 /// Synthetic protobuf fixtures follow FelixIsaac's original regression coverage in openusage#1058.
 func antigravityVarint(_ value: UInt64) -> [UInt8] {
     var remaining = value

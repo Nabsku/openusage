@@ -2,31 +2,11 @@ import XCTest
 @testable import OpenUsage
 
 final class AntigravityDbUsageScannerTests: XCTestCase {
-    private let now = OpenUsageISO8601.date(from: "2026-07-27T12:00:00.000Z")!
-    private let pricing = ModelPricing(
-        supplement: PricingSupplement(),
-        primary: PricingCatalog(entries: [
-            "gemini-3.6-flash": ModelRates(
-                inputPerMillion: 1,
-                outputPerMillion: 4,
-                cacheWritePerMillion: 1,
-                cacheReadPerMillion: 0.25
-            )
-        ]),
-        secondary: PricingCatalog()
-    )
+    private let now = antigravityNow
+    private let pricing = antigravityPricing
 
     private func makeDatabaseDirectory(fileNames: [String] = ["conversation.db"]) throws -> (url: URL, paths: [String]) {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let paths = try fileNames.map { name in
-            let url = directory.appendingPathComponent(name)
-            try Data().write(to: url)
-            return url.path
-        }
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return (directory, paths)
+        try makeAntigravityDatabaseDirectory(for: self, fileNames: fileNames)
     }
 
     func testMissingDatabaseDirectoryReturnsNil() async {
@@ -241,7 +221,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         XCTAssertTrue(scan.series.daily.isEmpty)
         XCTAssertEqual(
             Set(scan.unknownModelsByDay.values.flatMap { $0 }),
-            ["gemini-9-mystery", AntigravityProtoDecoder.GenerationEvent.unknownModel]
+            ["gemini-9-mystery", AntigravityDbUsageScanner.unknownModel]
         )
     }
 

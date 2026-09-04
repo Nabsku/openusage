@@ -50,14 +50,7 @@ actor AntigravityDbUsageScanner {
     /// A missing `~/.gemini` means Antigravity was never installed and yields no stores; any other
     /// listing failure (a permission problem, an I/O error) is surfaced instead of read as "no usage".
     static func conversationsDirectories(underGeminiHome geminiHome: String) throws -> [String] {
-        let names: [String]
-        do {
-            names = try FileManager.default.contentsOfDirectory(atPath: geminiHome)
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return []
-        }
-
-        return names
+        try listDirectoryNames(at: geminiHome)
             .filter { $0.hasPrefix("antigravity") }
             .sorted()
             .map { geminiHome.trimmingTrailingSlashes + "/" + $0 + "/conversations" }
@@ -68,20 +61,14 @@ actor AntigravityDbUsageScanner {
         var failingPaths: [String: String] = [:]
         var directories: [String] = []
         do {
-            directories = Self.deduplicated(try conversationsDirectories().map(expandHome))
+            directories = try conversationsDirectories().map(expandHome)
         } catch {
             failingPaths[Self.geminiHome] = error.localizedDescription
         }
 
-        var paths: [String] = []
-        for directory in directories {
-            do {
-                paths += try Self.databaseFiles(in: directory)
-            } catch {
-                failingPaths[directory] = error.localizedDescription
-            }
-        }
-        paths = Self.deduplicated(paths)
+        let discovered = Self.discoverDatabaseFiles(in: directories)
+        let paths = discovered.paths
+        failingPaths.merge(discovered.failures) { current, _ in current }
 
         let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
         // The home listing is checked every scan, so a remembered listing failure clears once it recovers.
@@ -263,25 +250,19 @@ actor AntigravityDbUsageScanner {
             if let cost = pricing.estimatedCostDollars(model: model, tokens: tokens) {
                 accumulator.add(
                     day: day, tokens: total.partialValue, cost: cost,
-                    model: Self.breakdownName(for: model, pricing: pricing)
+                    // Catalog keys carry a `-preview` suffix that means nothing to a reader.
+                    model: pricing.familyName(for: model, stripping: ["-preview"])
                 )
                 return
             }
         }
         accumulator.addUnknownModel(
-            day: day, model: candidates.first ?? AntigravityProtoDecoder.GenerationEvent.unknownModel
+            day: day, model: candidates.first ?? Self.unknownModel
         )
     }
 
-    /// The breakdown row for a priced name: its canonical pricing family, so effort variants
-    /// (`gemini-3.1-pro-low`), display labels ("Gemini 3.1 Pro (High)"), and placeholder IDs share
-    /// one row, as Cursor's breakdown does. Catalog keys carry a `-preview` suffix that means nothing
-    /// to a reader, so it is dropped. Names no alias rule knows keep their raw text: a guess would
-    /// silently merge unrelated models.
-    static func breakdownName(for model: String, pricing: ModelPricing) -> String {
-        let family = pricing.supplement.canonicalName(for: model) ?? model
-        return family.hasSuffix("-preview") ? String(family.dropLast("-preview".count)) : family
-    }
+    /// Shown in the unknown-model warning for a generation whose blob names no model at all.
+    static let unknownModel = "Unknown Antigravity Model"
 
     /// Names to price by, in order of preference. Antigravity logs `gemini-default` /
     /// `gemini-pro-default` as the ID when the picker is on its default choice and records the model
@@ -310,25 +291,45 @@ actor AntigravityDbUsageScanner {
         return bytes
     }
 
-    /// Symlinked or repeated stores (`~/.gemini/antigravity-2 -> antigravity`) resolve to the same
-    /// files; scanning both would count the same conversations twice.
-    private static func deduplicated(_ paths: [String]) -> [String] {
+    /// The `.db` files under every conversations directory, with each directory's listing failure
+    /// recorded rather than read as "no usage". Symlinked or repeated stores
+    /// (`~/.gemini/antigravity-2 -> antigravity`) resolve to the same files; scanning both would
+    /// count the same conversations twice, so resolved paths are kept only once.
+    private static func discoverDatabaseFiles(
+        in directories: [String]
+    ) -> (paths: [String], failures: [String: String]) {
+        var paths: [String] = []
+        var failures: [String: String] = [:]
         var seen: Set<String> = []
-        return paths.filter { seen.insert(URL(fileURLWithPath: $0).resolvingSymlinksInPath().path).inserted }
+
+        for directory in directories {
+            do {
+                for path in try databaseFiles(in: directory)
+                where seen.insert(URL(fileURLWithPath: path).resolvingSymlinksInPath().path).inserted {
+                    paths.append(path)
+                }
+            } catch {
+                failures[directory] = error.localizedDescription
+            }
+        }
+        return (paths, failures)
     }
 
     private static func databaseFiles(in directory: String) throws -> [String] {
-        let names: [String]
-        do {
-            names = try FileManager.default.contentsOfDirectory(atPath: directory)
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return []
-        }
-
-        return names
+        try listDirectoryNames(at: directory)
             .filter { $0.hasSuffix(".db") }
             .sorted()
             .map { directory.trimmingTrailingSlashes + "/" + $0 }
+    }
+
+    /// A directory that does not exist holds nothing; any other listing failure (a permission
+    /// problem, an I/O error) is surfaced to the caller instead of read as "no usage".
+    private static func listDirectoryNames(at path: String) throws -> [String] {
+        do {
+            return try FileManager.default.contentsOfDirectory(atPath: path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return []
+        }
     }
 
     private struct DatabaseFingerprint: Equatable {

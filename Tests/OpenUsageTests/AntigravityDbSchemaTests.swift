@@ -4,25 +4,12 @@ import XCTest
 /// Scanner behavior against real SQLite databases and real conversation-store layouts: schema
 /// variations, WAL-mode reads, and how stores are discovered under `~/.gemini`.
 final class AntigravityDbSchemaTests: XCTestCase {
-    private let now = OpenUsageISO8601.date(from: "2026-07-27T12:00:00.000Z")!
-    private let pricing = ModelPricing(
-        supplement: PricingSupplement(),
-        primary: PricingCatalog(entries: [
-            "gemini-3.6-flash": ModelRates(
-                inputPerMillion: 1,
-                outputPerMillion: 4,
-                cacheWritePerMillion: 1,
-                cacheReadPerMillion: 0.25
-            )
-        ]),
-        secondary: PricingCatalog()
-    )
+    private let now = antigravityNow
+    private let pricing = antigravityPricing
 
     private func makeDatabaseDirectory() throws -> (url: URL, path: String) {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return (directory, directory.appendingPathComponent("conversation.db").path)
+        let fixture = try makeAntigravityDatabaseDirectory(for: self)
+        return (fixture.url, fixture.paths[0])
     }
 
     func testDiscoversAntigravityConversationStoresUnderGeminiHome() throws {
@@ -67,7 +54,6 @@ final class AntigravityDbSchemaTests: XCTestCase {
     /// Two stores that resolve to the same directory must not count their conversations twice.
     func testSymlinkedDuplicateStoresAreScannedOnce() async throws {
         let fixture = try makeDatabaseDirectory()
-        try Data().write(to: URL(fileURLWithPath: fixture.path))
         let link = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fixture.url)
         addTeardownBlock { try? FileManager.default.removeItem(at: link) }

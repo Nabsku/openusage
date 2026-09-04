@@ -9,8 +9,6 @@ enum AntigravityProtoDecoder {
     }
 
     struct GenerationEvent: Equatable, Sendable {
-        static let unknownModel = "Unknown Antigravity Model"
-
         /// Field 19, Antigravity's internal model ID (`gemini-3.7-flash-high`, or a placeholder such as
         /// `gemini-pro-default` when the picker is on its default choice).
         var modelID: String?
