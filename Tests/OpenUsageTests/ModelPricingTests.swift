@@ -50,6 +50,8 @@ final class ModelPricingTests: XCTestCase {
             ("Gemini 3.8 Flash (Auto Balanced)", "gemini-3.8-flash"),
             ("Gemini 3.8 Flash", "gemini-3.8-flash"),
             ("Claude Opus 4.6 (Thinking)", "claude-opus-4-6"),
+            ("claude-opus-4-6-thinking", "claude-opus-4-6"),
+            ("claude-sonnet-4-6-thinking-high", "claude-sonnet-4-6"),
             ("Claude Sonnet 4.6 (Thinking)", "claude-sonnet-4-6"),
         ]
         for (label, canonical) in expectations {

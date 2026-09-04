@@ -279,7 +279,28 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
         let scan = try XCTUnwrap(result)
         XCTAssertTrue(scan.unknownModelsByDay.isEmpty)
-        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["gemini-pro-default"])
+        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["gemini-3.1-pro"])
+    }
+
+    func testBreakdownRowsFoldEffortVariantsLabelsAndPlaceholdersIntoOneFamily() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.1-pro-low", input: 10, output: 0, timestamp: timestamp)),
+            .init(index: 1, blob: antigravityGenerationBlob(
+                model: "gemini-pro-default", input: 5, output: 0, label: "Gemini 3.1 Pro (High)", timestamp: timestamp
+            )),
+            .init(index: 2, blob: antigravityGenerationBlob(model: "gemini-pro-agent", input: 1, output: 0, timestamp: timestamp)),
+            .init(index: 3, blob: antigravityGenerationBlob(model: "gemini-3.7-flash-exp-a", input: 2, output: 0, timestamp: timestamp)),
+            .init(index: 4, blob: antigravityGenerationBlob(model: "gemini-3.7-flash-tiered", input: 3, output: 0, timestamp: timestamp)),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
+        let scan = try XCTUnwrap(result)
+        let models = try XCTUnwrap(scan.modelUsage?.daily.first?.models)
+        XCTAssertEqual(models.map(\.model), ["gemini-3.1-pro", "gemini-3.7-flash"])
+        XCTAssertEqual(models.map(\.totalTokens), [16, 5])
     }
 
     func testDiscoversAntigravityConversationStoresUnderGeminiHome() throws {
@@ -313,7 +334,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
         let scan = try XCTUnwrap(result)
         XCTAssertTrue(scan.unknownModelsByDay.isEmpty)
-        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["Gemini 3.6 Flash (High)"])
+        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["gemini-3.6-flash"])
         XCTAssertEqual(scan.series.daily.first?.totalTokens, 15)
     }
 

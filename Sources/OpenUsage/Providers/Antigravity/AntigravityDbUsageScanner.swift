@@ -233,13 +233,26 @@ actor AntigravityDbUsageScanner {
         let candidates = Self.modelCandidates(id: event.modelID, label: event.label)
         for model in candidates {
             if let cost = pricing.estimatedCostDollars(model: model, tokens: tokens) {
-                accumulator.add(day: day, tokens: total.partialValue, cost: cost, model: model)
+                accumulator.add(
+                    day: day, tokens: total.partialValue, cost: cost,
+                    model: Self.breakdownName(for: model, pricing: pricing)
+                )
                 return
             }
         }
         accumulator.addUnknownModel(
             day: day, model: candidates.first ?? AntigravityProtoDecoder.GenerationEvent.unknownModel
         )
+    }
+
+    /// The breakdown row for a priced name: its canonical pricing family, so effort variants
+    /// (`gemini-3.1-pro-low`), display labels ("Gemini 3.1 Pro (High)"), and placeholder IDs share
+    /// one row, as Cursor's breakdown does. Catalog keys carry a `-preview` suffix that means nothing
+    /// to a reader, so it is dropped. Names no alias rule knows keep their raw text: a guess would
+    /// silently merge unrelated models.
+    static func breakdownName(for model: String, pricing: ModelPricing) -> String {
+        let family = pricing.supplement.canonicalName(for: model) ?? model
+        return family.hasSuffix("-preview") ? String(family.dropLast("-preview".count)) : family
     }
 
     /// Names to price by, in order of preference. Antigravity logs `gemini-default` /
