@@ -95,6 +95,9 @@ enum AntigravityProtoDecoder {
 
     /// `gen_metadata.data` wraps its event in field 1: model 19, token counts 4, and optional timestamp 9.
     /// An absent model remains visibly unpriced instead of silently borrowing another Gemini rate.
+    /// `fallbackTimestampSeconds` is the correlated `steps.metadata` timestamp, used only when the
+    /// embedded timing is missing. Callers must not pass a file modification time: it is not stable
+    /// across writes. With neither timestamp the event is dropped rather than assigned to a day.
     static func generationEvent(
         from blob: [UInt8],
         fallbackTimestampSeconds: Int64? = nil

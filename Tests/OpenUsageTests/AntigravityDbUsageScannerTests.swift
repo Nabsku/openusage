@@ -397,10 +397,66 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
     func testBatchSQLBoundsRowsAndSkipsOversizedBlobsBeforeHexExpansion() {
         let sql = AntigravityDbUsageScanner.dataSQL(after: 42)
 
+        let limit = AntigravityDbUsageScanner.maximumBlobBytes
+
         XCTAssertTrue(sql.contains("WHERE idx > 42 AND data IS NOT NULL"))
         XCTAssertTrue(sql.contains("LIMIT \(AntigravityDbUsageScanner.batchSize)"))
-        XCTAssertTrue(sql.contains("length(data) <= \(AntigravityDbUsageScanner.maximumBlobBytes)"))
-        XCTAssertTrue(sql.contains("THEN hex(data) ELSE NULL"))
+        XCTAssertTrue(sql.contains("length(g.data) <= \(limit)"))
+        XCTAssertTrue(sql.contains("THEN hex(g.data) ELSE NULL"))
+        XCTAssertTrue(sql.contains("length(metadata) <= \(limit) THEN hex(metadata) ELSE NULL END FROM steps WHERE idx = g.idx"))
+
+        let legacySQL = AntigravityDbUsageScanner.legacyDataSQL(after: 42)
+
+        XCTAssertTrue(legacySQL.contains("WHERE idx > 42 AND data IS NOT NULL"))
+        XCTAssertTrue(legacySQL.contains("LIMIT \(AntigravityDbUsageScanner.batchSize)"))
+        XCTAssertTrue(legacySQL.contains("length(data) <= \(limit)"))
+        XCTAssertTrue(legacySQL.contains("THEN hex(data) ELSE NULL"))
+        XCTAssertFalse(legacySQL.contains("steps"))
+    }
+
+    /// Reads a real SQLite database through `sqlite3`, so the `steps` correlation and the
+    /// missing-`steps` fallback run against the actual schema.
+    func testEventsWithoutAnyTimestampAreNotAttributedToDatabaseModificationDay() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let path = fixture.paths[0]
+        let sqlite = SQLiteCLIAccessor()
+        let dated = UInt64(now.timeIntervalSince1970) - 3_600
+        let datedHex = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 5, timestamp: dated)
+            .map { String(format: "%02x", $0) }.joined()
+        let undatedHex = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 1_000, output: 500, timestamp: nil)
+            .map { String(format: "%02x", $0) }.joined()
+        try sqlite.execute(path: path, sql: """
+            CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
+            CREATE TABLE steps (idx INTEGER PRIMARY KEY, metadata BLOB);
+            INSERT INTO gen_metadata (idx, data) VALUES (0, X'\(datedHex)'), (1, X'\(undatedHex)');
+            """)
+        let expectedDay = DailyUsageAccumulator.dayKey(from: Date(timeIntervalSince1970: TimeInterval(dated)))
+
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: path)
+        let firstScan = await AntigravityDbUsageScanner(
+            sqlite: sqlite, conversationsDirectory: { fixture.url.path }
+        ).scan(now: now, pricing: pricing)
+        let first = try XCTUnwrap(firstScan)
+
+        let later = now.addingTimeInterval(86_400)
+        try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: path)
+        let secondScan = await AntigravityDbUsageScanner(
+            sqlite: sqlite, conversationsDirectory: { fixture.url.path }
+        ).scan(now: later, pricing: pricing)
+        let second = try XCTUnwrap(secondScan)
+
+        XCTAssertEqual(first.series.daily.map(\.date), [expectedDay])
+        XCTAssertEqual(first.series.daily.first?.totalTokens, 15)
+        XCTAssertEqual(second.series.daily, first.series.daily)
+
+        // The same rows without a `steps` table use the legacy query and still skip the undated event.
+        try sqlite.execute(path: path, sql: "DROP TABLE steps")
+        try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: path)
+        let legacyScan = await AntigravityDbUsageScanner(
+            sqlite: sqlite, conversationsDirectory: { fixture.url.path }
+        ).scan(now: later, pricing: pricing)
+        let legacy = try XCTUnwrap(legacyScan)
+        XCTAssertEqual(legacy.series.daily, first.series.daily)
     }
 
     @MainActor

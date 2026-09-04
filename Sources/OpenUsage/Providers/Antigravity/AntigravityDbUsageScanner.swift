@@ -195,11 +195,13 @@ actor AntigravityDbUsageScanner {
                     continue
                 }
 
+                // The step timestamp is the only fallback. The database modification time is never
+                // used: it changes on every write, so an event stamped with it would move to a
+                // different day after a restart. Events with no timestamp at all are skipped.
                 let stepTimestamp = row.stepHex.flatMap(Self.bytes(fromHex:)).flatMap(AntigravityProtoDecoder.timestamp(fromStepMetadata:))
-                let fallbackTimestamp = stepTimestamp ?? Int64(cached.fingerprint.latestModification.timeIntervalSince1970)
 
                 guard let blob = Self.bytes(fromHex: hex),
-                      let event = AntigravityProtoDecoder.generationEvent(from: blob, fallbackTimestampSeconds: fallbackTimestamp),
+                      let event = AntigravityProtoDecoder.generationEvent(from: blob, fallbackTimestampSeconds: stepTimestamp),
                       Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds)) >= since
                 else { continue }
                 cached.events.append(event)
