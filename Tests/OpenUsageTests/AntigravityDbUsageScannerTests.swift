@@ -223,11 +223,30 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
     func testMissingDatabaseDirectoryReturnsNil() async {
         let scanner = AntigravityDbUsageScanner(
             sqlite: AntigravityFakeSQLite(),
-            conversationsDirectory: { "/nonexistent-\(UUID().uuidString)" }
+            conversationsDirectories: { ["/nonexistent-\(UUID().uuidString)"] }
         )
 
         let result = await scanner.scan(now: now, pricing: pricing)
         XCTAssertNil(result)
+    }
+
+    func testScansEveryConversationDirectoryAndSkipsMissingOnes() async throws {
+        let cli = try makeDatabaseDirectory()
+        let ide = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [
+            cli.paths[0]: [.init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 0, timestamp: timestamp))],
+            ide.paths[0]: [.init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.6-flash", input: 5, output: 0, timestamp: timestamp))],
+        ])
+        let scanner = AntigravityDbUsageScanner(
+            sqlite: sqlite,
+            conversationsDirectories: { [cli.url.path, "/nonexistent-\(UUID().uuidString)", ide.url.path] }
+        )
+
+        let result = await scanner.scan(now: now, pricing: pricing)
+        let scan = try XCTUnwrap(result)
+        XCTAssertEqual(scan.series.daily.count, 1)
+        XCTAssertEqual(scan.series.daily.first?.totalTokens, 15)
     }
 
     func testAccumulatesGenerationTokensCacheReadsAndEstimatedCost() async throws {
@@ -242,7 +261,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             timestamp: timestamp
         )
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: blob)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let result = await scanner.scan(now: now, pricing: pricing)
         let scan = try XCTUnwrap(result)
@@ -258,7 +277,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let rowCount = AntigravityDbUsageScanner.batchSize * 2 + 1
         let rows = (0..<rowCount).map { AntigravityFixtureRow(index: $0 * 2, blob: blob) }
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: rows])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let result = await scanner.scan(now: now, pricing: pricing)
         let scan = try XCTUnwrap(result)
@@ -271,7 +290,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let first = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 5, timestamp: timestamp)
         let second = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 20, output: 10, timestamp: timestamp)
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: first)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         _ = await scanner.scan(now: now, pricing: pricing)
         _ = await scanner.scan(now: now, pricing: pricing)
@@ -297,7 +316,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
         let original = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 5, timestamp: timestamp)
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: original)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
         try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: fixture.paths[0])
 
         _ = await scanner.scan(now: now, pricing: pricing)
@@ -331,7 +350,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             .init(index: 1, blob: missing),
             .init(index: 2, blob: expired)
         ]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let result = await scanner.scan(now: now, pricing: pricing)
         let scan = try XCTUnwrap(result)
@@ -353,7 +372,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         ]])
         let scanner = AntigravityDbUsageScanner(
             sqlite: sqlite,
-            conversationsDirectory: { fixture.url.path },
+            conversationsDirectories: { [fixture.url.path] },
             oversizedBlobWarning: { _ in _ = recorder.next() }
         )
 
@@ -378,7 +397,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         )
         let scanner = AntigravityDbUsageScanner(
             sqlite: sqlite,
-            conversationsDirectory: { fixture.url.path },
+            conversationsDirectories: { [fixture.url.path] },
             readFailureWarning: { _ in _ = recorder.next() }
         )
 
@@ -396,7 +415,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             cancellingPath: fixture.paths[1]
         )
         let cancellableScanner = AntigravityDbUsageScanner(
-            sqlite: cancellableSQLite, conversationsDirectory: { fixture.url.path }
+            sqlite: cancellableSQLite, conversationsDirectories: { [fixture.url.path] }
         )
         let (fixedNow, fixedPricing) = (now, pricing)
         let cancelled = await Task { await cancellableScanner.scan(now: fixedNow, pricing: fixedPricing) }.value
@@ -437,14 +456,14 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
 
         try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: path)
         let firstScan = await AntigravityDbUsageScanner(
-            sqlite: sqlite, conversationsDirectory: { fixture.url.path }
+            sqlite: sqlite, conversationsDirectories: { [fixture.url.path] }
         ).scan(now: now, pricing: pricing)
         let first = try XCTUnwrap(firstScan)
 
         let later = now.addingTimeInterval(86_400)
         try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: path)
         let secondScan = await AntigravityDbUsageScanner(
-            sqlite: sqlite, conversationsDirectory: { fixture.url.path }
+            sqlite: sqlite, conversationsDirectories: { [fixture.url.path] }
         ).scan(now: later, pricing: pricing)
         let second = try XCTUnwrap(secondScan)
 
@@ -455,7 +474,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         // The same rows without a `steps` table use the legacy query and still skip the undated event.
         try sqlite.execute(path: path, sql: "DROP TABLE steps")
         let legacyScan = await AntigravityDbUsageScanner(
-            sqlite: sqlite, conversationsDirectory: { fixture.url.path }
+            sqlite: sqlite, conversationsDirectories: { [fixture.url.path] }
         ).scan(now: later, pricing: pricing)
         let legacy = try XCTUnwrap(legacyScan)
         XCTAssertEqual(legacy.series.daily, first.series.daily)
@@ -474,7 +493,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             timestamp: timestamp
         )
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: blob)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let routing = RoutingHTTPClient { request in
             if request.url.path.contains("retrieveUserQuotaSummary") {

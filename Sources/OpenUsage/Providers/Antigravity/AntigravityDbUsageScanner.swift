@@ -10,19 +10,19 @@ actor AntigravityDbUsageScanner {
     static let batchSize = 8
 
     private let sqlite: SQLiteAccessing
-    private let conversationsDirectory: @Sendable () -> String
+    private let conversationsDirectories: @Sendable () -> [String]
     private let readFailureReporter: UsageLogReadFailureReporter
     private let oversizedBlobReporter: UsageLogReadFailureReporter
     private var scanCache: [String: CachedDatabase] = [:]
 
     init(
         sqlite: SQLiteAccessing = SQLiteCLIAccessor(),
-        conversationsDirectory: @escaping @Sendable () -> String = AntigravityDbUsageScanner.defaultConversationsDirectory,
+        conversationsDirectories: @escaping @Sendable () -> [String] = AntigravityDbUsageScanner.defaultConversationsDirectories,
         readFailureWarning: UsageLogReadFailureReporter.Warning? = nil,
         oversizedBlobWarning: UsageLogReadFailureReporter.Warning? = nil
     ) {
         self.sqlite = sqlite
-        self.conversationsDirectory = conversationsDirectory
+        self.conversationsDirectories = conversationsDirectories
         self.readFailureReporter = UsageLogReadFailureReporter(
             logTag: LogTag.plugin("antigravity"),
             warning: readFailureWarning
@@ -36,37 +36,34 @@ actor AntigravityDbUsageScanner {
         )
     }
 
-    static let defaultConversationsDirectory: @Sendable () -> String = {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gemini/antigravity-cli/conversations").path
+    /// Each Antigravity surface keeps its own conversation store under `~/.gemini`: the `agy` CLI,
+    /// the Antigravity IDE, the Antigravity 2.0 app, and ACP-hosted sessions.
+    static let defaultConversationsDirectories: @Sendable () -> [String] = {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return ["antigravity-cli", "antigravity", "antigravity-ide", "antigravity-acp"].map {
+            home.appendingPathComponent(".gemini/\($0)/conversations").path
+        }
     }
 
     func scan(daysBack: Int = 30, now: Date = Date(), pricing: ModelPricing) async -> LogUsageScan? {
-        let directory = expandHome(conversationsDirectory())
-        let paths: [String]
-        do {
-            paths = try Self.databaseFiles(in: directory)
-        } catch {
-            let newlyFailing = await readFailureReporter.update(checkedPaths: [directory], failingPaths: [directory])
-            if !newlyFailing.isEmpty {
-                AppLog.warn(LogTag.plugin("antigravity"), "conversation directory unreadable: \(error.localizedDescription)")
+        let directories = conversationsDirectories().map(expandHome)
+        var paths: [String] = []
+        var failingPaths: [String: String] = [:]
+        for directory in directories {
+            do {
+                paths += try Self.databaseFiles(in: directory)
+            } catch {
+                failingPaths[directory] = error.localizedDescription
             }
-            return nil
         }
 
         let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
-        let checkedPaths = Set(paths)
+        let checkedPaths = Set(paths).union(directories)
         scanCache = scanCache.filter {
             checkedPaths.contains($0.key) && $0.value.fingerprint.latestModification >= since
         }
 
-        guard !paths.isEmpty else {
-            await readFailureReporter.update(checkedPaths: [directory], failingPaths: [])
-            return nil
-        }
-
         var accumulator = DailyUsageAccumulator()
-        var failingPaths: [String: String] = [:]
         var oversizedPaths: Set<String> = []
 
         for path in paths {
