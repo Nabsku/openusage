@@ -221,11 +221,20 @@ actor AntigravityDbUsageScanner {
             output: event.outputTokens
         )
 
-        guard let cost = pricing.estimatedCostDollars(model: event.model, tokens: tokens) else {
-            accumulator.addUnknownModel(day: day, model: event.model)
+        let model = Self.breakdownModel(event.model)
+        guard let cost = pricing.estimatedCostDollars(model: model, tokens: tokens) else {
+            accumulator.addUnknownModel(day: day, model: model)
             return
         }
-        accumulator.add(day: day, tokens: total.partialValue, cost: cost, model: event.model)
+        accumulator.add(day: day, tokens: total.partialValue, cost: cost, model: model)
+    }
+
+    /// Antigravity resolves subagent tiers (`flash_lite`, `flash`, `pro`) through a server-sent
+    /// `TieredModelConfig`, and logs the resolved ID with a `-tiered` suffix
+    /// (`gemini-3.7-flash-tiered`). It is the same model at the same price, so the breakdown
+    /// shows it under the base name.
+    static func breakdownModel(_ model: String) -> String {
+        model.hasSuffix("-tiered") ? String(model.dropLast("-tiered".count)) : model
     }
 
     static func bytes(fromHex hex: String) -> [UInt8]? {

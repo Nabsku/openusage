@@ -230,6 +230,22 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    func testTieredSubagentModelsFoldIntoTheBaseModelRow() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 0, timestamp: timestamp)),
+            .init(index: 1, blob: antigravityGenerationBlob(model: "gemini-3.6-flash-tiered", input: 5, output: 0, timestamp: timestamp)),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        let result = await scanner.scan(now: now, pricing: pricing)
+        let scan = try XCTUnwrap(result)
+        let models = try XCTUnwrap(scan.modelUsage?.daily.first?.models)
+        XCTAssertEqual(models.map(\.model), ["gemini-3.6-flash"])
+        XCTAssertEqual(scan.series.daily.first?.totalTokens, 15)
+    }
+
     func testScansEveryConversationDirectoryAndSkipsMissingOnes() async throws {
         let cli = try makeDatabaseDirectory()
         let ide = try makeDatabaseDirectory()
