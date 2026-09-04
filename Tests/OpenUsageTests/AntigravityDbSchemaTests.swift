@@ -23,7 +23,11 @@ final class AntigravityDbSchemaTests: XCTestCase {
 
         XCTAssertEqual(
             try AntigravityDbUsageScanner.conversationsDirectories(underGeminiHome: home.path),
-            [home.path + "/antigravity/conversations", home.path + "/antigravity-cli/conversations"]
+            [
+                home.path + "/antigravity/conversations",
+                home.path + "/antigravity-cli/conversations",
+                home.path + "/antigravity-ide/conversations",
+            ]
         )
         XCTAssertEqual(
             try AntigravityDbUsageScanner.conversationsDirectories(underGeminiHome: "/nonexistent-\(UUID().uuidString)"),
@@ -38,6 +42,28 @@ final class AntigravityDbSchemaTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: home) }
 
         XCTAssertThrowsError(try AntigravityDbUsageScanner.conversationsDirectories(underGeminiHome: home.path))
+
+        let recorder = Counter()
+        let scanner = AntigravityDbUsageScanner(
+            sqlite: AntigravityFakeSQLite(),
+            conversationsDirectories: { try AntigravityDbUsageScanner.conversationsDirectories(underGeminiHome: home.path) },
+            readFailureWarning: { _ in _ = recorder.next() }
+        )
+
+        let failedScan = await scanner.scan(now: now, pricing: pricing)
+        XCTAssertNil(failedScan)
+        XCTAssertEqual(recorder.next(), 1)
+    }
+
+    /// A store whose `conversations` directory cannot be read is a real problem, not "no usage":
+    /// it must reach the read-failure reporter instead of being dropped as a missing store.
+    func testUnreadableConversationStoreIsReportedInsteadOfReadAsNoUsage() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent("antigravity-ide"), withIntermediateDirectories: true
+        )
+        try Data().write(to: home.appendingPathComponent("antigravity-ide/conversations"))
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
 
         let recorder = Counter()
         let scanner = AntigravityDbUsageScanner(

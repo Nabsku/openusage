@@ -49,12 +49,14 @@ actor AntigravityDbUsageScanner {
     /// means a new surface is picked up without a release.
     /// A missing `~/.gemini` means Antigravity was never installed and yields no stores; any other
     /// listing failure (a permission problem, an I/O error) is surfaced instead of read as "no usage".
+    /// Every candidate store is returned, even one without a `conversations` child: the scan's
+    /// listing treats a missing directory as empty and reports one it cannot read, whereas an
+    /// existence check here would drop an unreadable store as if it held no usage.
     static func conversationsDirectories(underGeminiHome geminiHome: String) throws -> [String] {
         try listDirectoryNames(at: geminiHome)
             .filter { $0.hasPrefix("antigravity") }
             .sorted()
             .map { geminiHome.trimmingTrailingSlashes + "/" + $0 + "/conversations" }
-            .filter { FileManager.default.fileExists(atPath: $0) }
     }
 
     func scan(daysBack: Int = 30, now: Date = Date(), pricing: ModelPricing) async -> LogUsageScan? {
