@@ -109,12 +109,14 @@ actor AntigravityDbUsageScanner {
     /// `CASE` prevents SQLite from expanding oversized blobs, while the inner `LIMIT` bounds the
     /// maximum hex payload returned by any subprocess to roughly `batchSize * maximumBlobBytes * 2`.
     /// Modern Antigravity conversation DBs omit timestamps from `gen_metadata.data` and record them
-    /// in `steps.metadata`, which is correlated by `idx`.
-    static func dataSQL(after index: Int) -> String {
-        """
+    /// in `steps.metadata`, correlated by `idx`; `includeSteps: false` serves databases without that table.
+    static func dataSQL(after index: Int, includeSteps: Bool = true) -> String {
+        let stepColumn = includeSteps
+            ? ",\n    'step_hex', (SELECT CASE WHEN length(metadata) <= \(maximumBlobBytes) THEN hex(metadata) ELSE NULL END FROM steps WHERE idx = g.idx)"
+            : ""
+        return """
         SELECT json_group_array(json_object('index', g.idx, 'hex',
-            CASE WHEN length(g.data) <= \(maximumBlobBytes) THEN hex(g.data) ELSE NULL END,
-            'step_hex', (SELECT CASE WHEN length(metadata) <= \(maximumBlobBytes) THEN hex(metadata) ELSE NULL END FROM steps WHERE idx = g.idx)))
+            CASE WHEN length(g.data) <= \(maximumBlobBytes) THEN hex(g.data) ELSE NULL END\(stepColumn)))
         FROM (
             SELECT idx, data FROM gen_metadata
             WHERE idx > \(index) AND data IS NOT NULL
@@ -124,19 +126,7 @@ actor AntigravityDbUsageScanner {
         """
     }
 
-    /// Fallback query if `steps` table does not exist in an older or external database.
-    static func legacyDataSQL(after index: Int) -> String {
-        """
-        SELECT json_group_array(json_object('index', idx, 'hex',
-            CASE WHEN length(data) <= \(maximumBlobBytes) THEN hex(data) ELSE NULL END))
-        FROM (
-            SELECT idx, data FROM gen_metadata
-            WHERE idx > \(index) AND data IS NOT NULL
-            ORDER BY idx
-            LIMIT \(batchSize)
-        )
-        """
-    }
+    static let stepsTableProbeSQL = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'steps'"
 
     private func cachedDatabase(path: String, since: Date) throws -> CachedDatabase? {
         let fingerprint = try DatabaseFingerprint(path: path)
@@ -167,20 +157,14 @@ actor AntigravityDbUsageScanner {
     }
 
     private func readDatabase(path: String, since: Date, into cached: inout CachedDatabase) throws {
-        var usesLegacySQL = false
+        if cached.hasStepsTable == nil {
+            cached.hasStepsTable = try sqlite.queryValue(path: path, sql: Self.stepsTableProbeSQL) != nil
+        }
+        let includeSteps = cached.hasStepsTable ?? false
+
         while !Task.isCancelled {
-            let sql = usesLegacySQL ? Self.legacyDataSQL(after: cached.lastIndex) : Self.dataSQL(after: cached.lastIndex)
-            let payload: String?
-            do {
-                payload = try sqlite.queryValue(path: path, sql: sql)
-            } catch {
-                if !usesLegacySQL, Self.isMissingStepsSchemaError(error) {
-                    usesLegacySQL = true
-                    continue
-                }
-                throw error
-            }
-            guard let payload else { break }
+            let sql = Self.dataSQL(after: cached.lastIndex, includeSteps: includeSteps)
+            guard let payload = try sqlite.queryValue(path: path, sql: sql) else { break }
             let rows = try JSONDecoder().decode([Row].self, from: Data(payload.utf8))
             guard !rows.isEmpty else { break }
 
@@ -195,13 +179,10 @@ actor AntigravityDbUsageScanner {
                     continue
                 }
 
-                // The step timestamp is the only fallback. The database modification time is never
-                // used: it changes on every write, so an event stamped with it would move to a
-                // different day after a restart. Events with no timestamp at all are skipped.
-                let stepTimestamp = row.stepHex.flatMap(Self.bytes(fromHex:)).flatMap(AntigravityProtoDecoder.timestamp(fromStepMetadata:))
-
                 guard let blob = Self.bytes(fromHex: hex),
-                      let event = AntigravityProtoDecoder.generationEvent(from: blob, fallbackTimestampSeconds: stepTimestamp),
+                      let event = AntigravityProtoDecoder.generationEvent(
+                          from: blob, stepMetadata: row.stepHex.flatMap(Self.bytes(fromHex:))
+                      ),
                       Date(timeIntervalSince1970: TimeInterval(event.timestampSeconds)) >= since
                 else { continue }
                 cached.events.append(event)
@@ -209,14 +190,6 @@ actor AntigravityDbUsageScanner {
 
             if rows.count < Self.batchSize { break }
         }
-    }
-
-    static func isMissingStepsSchemaError(_ error: Error) -> Bool {
-        guard case SQLiteError.queryFailed(let stderr) = error else {
-            return false
-        }
-        let lower = stderr.lowercased()
-        return lower.contains("no such table") || lower.contains("no such column")
     }
 
     private struct Row: Decodable {
@@ -321,5 +294,7 @@ actor AntigravityDbUsageScanner {
         var lastIndex = -1
         var events: [AntigravityProtoDecoder.GenerationEvent] = []
         var sawOversizedBlob = false
+        /// Probed once per database; nil until the first read.
+        var hasStepsTable: Bool?
     }
 }

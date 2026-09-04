@@ -22,6 +22,15 @@ private func antigravityBytesField(_ number: UInt32, _ bytes: [UInt8]) -> [UInt8
     antigravityVarint(UInt64(number) << 3 | 2) + antigravityVarint(UInt64(bytes.count)) + bytes
 }
 
+private func antigravityHex(_ bytes: [UInt8]) -> String {
+    bytes.map { String(format: "%02x", $0) }.joined()
+}
+
+/// `steps.metadata`: field 1 is a Timestamp message whose field 1 is seconds.
+private func antigravityStepMetadata(timestamp: UInt64) -> [UInt8] {
+    antigravityBytesField(1, antigravityVarintField(1, timestamp))
+}
+
 private func antigravityGenerationBlob(
     model: String?,
     input: UInt64,
@@ -74,6 +83,7 @@ private final class AntigravityFakeSQLite: SQLiteAccessing, @unchecked Sendable 
             throw SQLiteError.queryFailed("database locked")
         }
         if path == cancellingPath { withUnsafeCurrentTask { $0?.cancel() } }
+        if sql == AntigravityDbUsageScanner.stepsTableProbeSQL { return nil }
         let marker = "WHERE idx > "
         guard let markerRange = sql.range(of: marker),
               let cursor = Int(sql[markerRange.upperBound...].split(whereSeparator: \.isWhitespace).first ?? "")
@@ -87,9 +97,7 @@ private final class AntigravityFakeSQLite: SQLiteAccessing, @unchecked Sendable 
             .sorted { $0.index < $1.index }
             .prefix(AntigravityDbUsageScanner.batchSize)
             .map { row in
-                let value: Any = row.blob.map { bytes in
-                    bytes.map { String(format: "%02x", $0) }.joined()
-                } ?? NSNull()
+                let value: Any = row.blob.map(antigravityHex) ?? NSNull()
                 return ["index": row.index, "hex": value]
             }
 
@@ -161,8 +169,7 @@ final class AntigravityProtoDecoderTests: XCTestCase {
     }
 
     func testExtractsStepMetadataTimestamp() {
-        let wallClock = antigravityVarintField(1, 1_800_000_000)
-        let stepMeta = antigravityBytesField(1, wallClock)
+        let stepMeta = antigravityStepMetadata(timestamp: 1_800_000_000)
         XCTAssertEqual(AntigravityProtoDecoder.timestamp(fromStepMetadata: stepMeta), 1_800_000_000)
         XCTAssertNil(AntigravityProtoDecoder.timestamp(fromStepMetadata: []))
         XCTAssertNil(AntigravityProtoDecoder.timestamp(fromStepMetadata: [0xff]))
@@ -175,7 +182,9 @@ final class AntigravityProtoDecoderTests: XCTestCase {
             output: 100,
             timestamp: nil
         )
-        let event = try XCTUnwrap(AntigravityProtoDecoder.generationEvent(from: blobWithoutTimestamp, fallbackTimestampSeconds: 1_800_000_123))
+        let event = try XCTUnwrap(AntigravityProtoDecoder.generationEvent(
+            from: blobWithoutTimestamp, stepMetadata: antigravityStepMetadata(timestamp: 1_800_000_123)
+        ))
         XCTAssertEqual(event.model, "gemini-3.8-flash")
         XCTAssertEqual(event.inputTokens, 500)
         XCTAssertEqual(event.outputTokens, 100)
@@ -405,12 +414,8 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         XCTAssertTrue(sql.contains("THEN hex(g.data) ELSE NULL"))
         XCTAssertTrue(sql.contains("length(metadata) <= \(limit) THEN hex(metadata) ELSE NULL END FROM steps WHERE idx = g.idx"))
 
-        let legacySQL = AntigravityDbUsageScanner.legacyDataSQL(after: 42)
-
-        XCTAssertTrue(legacySQL.contains("WHERE idx > 42 AND data IS NOT NULL"))
-        XCTAssertTrue(legacySQL.contains("LIMIT \(AntigravityDbUsageScanner.batchSize)"))
-        XCTAssertTrue(legacySQL.contains("length(data) <= \(limit)"))
-        XCTAssertTrue(legacySQL.contains("THEN hex(data) ELSE NULL"))
+        let legacySQL = AntigravityDbUsageScanner.dataSQL(after: 42, includeSteps: false)
+        XCTAssertTrue(legacySQL.contains("THEN hex(g.data) ELSE NULL END))"))
         XCTAssertFalse(legacySQL.contains("steps"))
     }
 
@@ -421,10 +426,8 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let path = fixture.paths[0]
         let sqlite = SQLiteCLIAccessor()
         let dated = UInt64(now.timeIntervalSince1970) - 3_600
-        let datedHex = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 5, timestamp: dated)
-            .map { String(format: "%02x", $0) }.joined()
-        let undatedHex = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 1_000, output: 500, timestamp: nil)
-            .map { String(format: "%02x", $0) }.joined()
+        let datedHex = antigravityHex(antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 5, timestamp: dated))
+        let undatedHex = antigravityHex(antigravityGenerationBlob(model: "gemini-3.6-flash", input: 1_000, output: 500, timestamp: nil))
         try sqlite.execute(path: path, sql: """
             CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
             CREATE TABLE steps (idx INTEGER PRIMARY KEY, metadata BLOB);
@@ -451,7 +454,6 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
 
         // The same rows without a `steps` table use the legacy query and still skip the undated event.
         try sqlite.execute(path: path, sql: "DROP TABLE steps")
-        try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: path)
         let legacyScan = await AntigravityDbUsageScanner(
             sqlite: sqlite, conversationsDirectory: { fixture.url.path }
         ).scan(now: later, pricing: pricing)
@@ -507,13 +509,5 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         XCTAssertEqual(total.totalUSD, 3, accuracy: 0.000_001)
         XCTAssertEqual(total.totalTokens, 1_500_000)
         XCTAssertTrue(total.isEstimated)
-    }
-
-    func testIsMissingStepsSchemaError() {
-        XCTAssertTrue(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("Parse error: no such table: steps")))
-        XCTAssertTrue(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("Error: no such column: s.metadata")))
-        XCTAssertFalse(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("Error: database is locked")))
-        XCTAssertFalse(AntigravityDbUsageScanner.isMissingStepsSchemaError(SQLiteError.queryFailed("timeout after 5 seconds")))
-        XCTAssertFalse(AntigravityDbUsageScanner.isMissingStepsSchemaError(CocoaError(.fileNoSuchFile)))
     }
 }

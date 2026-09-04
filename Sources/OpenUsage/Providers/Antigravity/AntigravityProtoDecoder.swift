@@ -84,24 +84,26 @@ enum AntigravityProtoDecoder {
         return value
     }
 
-    /// Decodes a step timestamp from `steps.metadata` (field 1 is a google.protobuf.Timestamp message with field 1 = seconds).
-    static func timestamp(fromStepMetadata stepMetadata: [UInt8]) -> Int64? {
-        guard let timestampBytes = bytesField(1, in: stepMetadata),
-              let seconds = varintField(1, in: timestampBytes),
+    /// Seconds from a `google.protobuf.Timestamp` message (field 1), rejecting zero and overflow.
+    private static func timestampSeconds(in message: [UInt8]) -> Int64? {
+        guard let seconds = varintField(1, in: message),
               let timestampSeconds = Int64(exactly: seconds), timestampSeconds > 0
         else { return nil }
         return timestampSeconds
     }
 
-    /// `gen_metadata.data` wraps its event in field 1: model 19, token counts 4, and optional timestamp 9.
-    /// An absent model remains visibly unpriced instead of silently borrowing another Gemini rate.
-    /// `fallbackTimestampSeconds` is the correlated `steps.metadata` timestamp, used only when the
-    /// embedded timing is missing. Callers must not pass a file modification time: it is not stable
-    /// across writes. With neither timestamp the event is dropped rather than assigned to a day.
-    static func generationEvent(
-        from blob: [UInt8],
-        fallbackTimestampSeconds: Int64? = nil
-    ) -> GenerationEvent? {
+    /// The step's wall-clock time from `steps.metadata`, whose field 1 is a Timestamp message.
+    static func timestamp(fromStepMetadata stepMetadata: [UInt8]) -> Int64? {
+        bytesField(1, in: stepMetadata).flatMap(timestampSeconds(in:))
+    }
+
+    /// `gen_metadata.data` wraps its event in field 1: model 19, token counts 4, and optional timing 9
+    /// (whose field 4 is a Timestamp message). An absent model remains visibly unpriced instead of
+    /// silently borrowing another Gemini rate. `stepMetadata` is the correlated `steps.metadata` blob,
+    /// consulted only when the embedded timing is missing; it is the sole fallback because file
+    /// modification times move on every write. With neither timestamp the event is dropped rather than
+    /// assigned to a day.
+    static func generationEvent(from blob: [UInt8], stepMetadata: [UInt8]? = nil) -> GenerationEvent? {
         guard let wrapped = bytesField(1, in: blob) else { return nil }
 
         let decodedModel = bytesField(19, in: wrapped).flatMap { String(bytes: $0, encoding: .utf8) }
@@ -120,26 +122,18 @@ enum AntigravityProtoDecoder {
               billableInputTokens.partialValue != 0 || outputTokens != 0 || cacheReadTokens != 0
         else { return nil }
 
-        let timestampSeconds: Int64?
-        if let timingBytes = bytesField(9, in: wrapped),
-           let wallClockBytes = bytesField(4, in: timingBytes),
-           let timestamp = varintField(1, in: wallClockBytes),
-           let parsed = Int64(exactly: timestamp), parsed > 0 {
-            timestampSeconds = parsed
-        } else if let fallback = fallbackTimestampSeconds, fallback > 0 {
-            timestampSeconds = fallback
-        } else {
-            timestampSeconds = nil
-        }
-
-        guard let validTimestamp = timestampSeconds else { return nil }
+        let embeddedTimestamp = bytesField(9, in: wrapped)
+            .flatMap { bytesField(4, in: $0) }
+            .flatMap(timestampSeconds(in:))
+        guard let timestampSeconds = embeddedTimestamp ?? stepMetadata.flatMap(timestamp(fromStepMetadata:))
+        else { return nil }
 
         return GenerationEvent(
             model: model.flatMap { $0.isEmpty ? nil : $0 } ?? GenerationEvent.unknownModel,
             inputTokens: billableInputTokens.partialValue,
             outputTokens: outputTokens,
             cacheReadTokens: cacheReadTokens,
-            timestampSeconds: validTimestamp
+            timestampSeconds: timestampSeconds
         )
     }
 }
